@@ -1,0 +1,13 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+const source=await readFile(new URL('./index.js',import.meta.url),'utf8');
+const worker=(await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'))).default;
+const origin='https://monitor.example';
+const req=(path,options={})=>new Request(origin+path,options);
+test('page responds and includes calculator without server secrets',async()=>{const r=await worker.fetch(req('/'),{});assert.equal(r.status,200);const html=await r.text();assert.match(html,/竞彩单场比分计算/);assert.ok(!html.includes('BACKEND_PASSWORD'))});
+test('unauthenticated API access denied',async()=>{assert.equal((await worker.fetch(req('/api/tasks'),{})).status,401)});
+test('missing backend fails explicitly',async()=>{assert.equal((await worker.fetch(req('/api/tasks',{headers:{'oai-authenticated-user-id':'user'}}),{})).status,503)});
+test('cross origin write denied',async()=>{assert.equal((await worker.fetch(req('/api/tasks',{method:'POST',headers:{'oai-authenticated-user-id':'user',origin:'https://evil.example'}}),{})).status,403)});
+test('proxy whitelist rejects arbitrary paths',async()=>{assert.equal((await worker.fetch(req('/api/secrets',{headers:{'oai-authenticated-user-id':'user'}}),{})).status,404)});
+test('upstream credentials remain server side',async()=>{const old=globalThis.fetch;try{globalThis.fetch=async(url,options)=>{assert.equal(url.href,'https://backend.example/api/tasks');assert.equal(options.headers.authorization,'Basic '+btoa('service:private'));assert.equal(options.redirect,'error');return Response.json([{id:1}])};const r=await worker.fetch(req('/api/tasks',{headers:{'oai-authenticated-user-id':'user'}}),{BACKEND_URL:'https://backend.example',BACKEND_USER:'service',BACKEND_PASSWORD:'private'});assert.deepEqual(await r.json(),[{id:1}])}finally{globalThis.fetch=old}});

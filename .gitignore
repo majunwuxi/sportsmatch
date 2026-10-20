@@ -8,3 +8,6 @@ __pycache__/
 .venv/
 data/
 *.pyc
+.pytest_cache/
+*.poller.lock
+site/dist/

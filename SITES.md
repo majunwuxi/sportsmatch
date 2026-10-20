@@ -1,22 +1,23 @@
-# ChatGPT Sites 部署评估
+# ChatGPT Sites — deployment assessment and handoff
 
-官方说明：https://help.openai.com/en/articles/20001339-creating-and-using-chatgpt-sites
+## Architecture
 
-ChatGPT Sites 支持创建、托管、发布交互式网站，需在支持的 ChatGPT Work/Codex 环境中创建和发布。
+Sites hosts `site/worker/index.js`: the Chinese responsive dashboard and same-origin server-side API proxy. Sites runtime supports secret environment variables and authenticated visitor headers. The Site remains owner-private; publication does not mean public sharing.
 
-## 推荐分工
+The Python scheduler stays in a separate always-on service. Available Sites documentation establishes Workers HTTP execution, but not a durable minute-frequency scheduler for this Python application. Do not run a daemon thread in a Worker or depend on an open browser tab for polling.
 
-- ChatGPT Sites：以用户授权和访问设置为前提，承载响应式中文管理界面。
-- amstd：独立 FastAPI 管理 API、SQLite 存储、定时监测进程、Telegram 通知。
-- GitHub：源代码真相来源；Secrets 永不入库。
+## Runtime secrets (never commit values)
 
-注意：**不能从拥有 GitHub 代码直接推出 Sites 已部署**。需在 ChatGPT Work 中实际创建、配置和发布，拿到正式 URL 后才算上线。
+Sites: `BACKEND_URL` (HTTPS origin), `BACKEND_USER`, `BACKEND_PASSWORD` (mark all secret).
+Independent backend: `APISPORTS_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ADMIN_USER`, `ADMIN_PASSWORD`, `DATABASE_PATH`, `ENABLE_POLLER=true`, `API_DAILY_LIMIT`. Use a dedicated service account and a separate API quota/key when possible.
 
-## 正式迁移前验证
+The browser cannot supply upstream credentials or a target URL. The proxy only accepts known API paths, requires Sites visitor identity, checks write origins, refuses HTTP backends and redirects, and does not reflect upstream error URLs. Keep owner-only access. For future multi-user sharing add record ownership; the current backend is a single-account administration service.
 
-1. Sites 是否能安全连接到现有受保护的后台接口，避免暴露 API Key；
-2. 跨域、认证和会话机制；目前 MVP 使用 Basic Auth，仅适合受保护的自托管管理台；
-3. 访问控制、Webhook 或轮询费用、服务端 Secrets、日志审计；
-4. 后台定时任务是否具备可验证的长期持续执行能力。未确认前依旧交给 amstd。
+## Current status
 
-本仓库并未发布任何 ChatGPT Site。
+Site project: `appgprj_6ad718b88cd8819195c1d2b1773221ad`.
+Expected origin: https://wellmax-match-monitor.letnek-majun.chatgpt.site . Deployment success must be confirmed separately by Sites.
+
+No independent backend URL or credentials were provided in this session. Therefore real fixture searches, persistent task operations, unattended polling and Telegram delivery are NOT live-verified. The interface explicitly reports this state. The single-match correct-score calculator and JSON export work independently. Do not report the whole platform as operational before backend configuration and live acceptance tests.
+
+Configure the independent service first, verify it over HTTPS, then set Sites secrets and redeploy. Do not change or restart `napoli-monitor.service`. Never copy its files or credentials. See TEST_REPORT.md for verification and remaining gates.

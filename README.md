@@ -18,3 +18,7 @@ MVP development. **Not deployed**. Existing `/opt/napoli-monitor` service on `am
 See `.env.example`, `app.py` and `DEPLOY.md`.
 
 ChatGPT Sites can be evaluated for the frontend, but this Python background scheduler requires an always-on runtime. See `SITES.md`.
+
+## ChatGPT Site
+
+The owner-private Sites dashboard lives under `site/`; see SITES.md and TEST_REPORT.md. The website can calculate single-match correct-score tickets immediately. Live search, monitoring and Telegram require a separately configured backend; they are not enabled merely by publishing the Site. The backend fixes and automated tests are included in this repository.

@@ -73,3 +73,11 @@ ssh -L 8765:127.0.0.1:8765 root@YOUR_SERVER
 - 当前支持一场比赛关联一组投注记录；同场多组投注需在后续增加组合层。
 - 终场状态后任务自动停止；取消和腰斩也会终止轮询并提醒。
 - 当前新平台与原脚本是**两套完全独立的服务**。未来迁移需经测试确认，不能并行对同一比赛重复轮询。
+
+## Sites proxy and current repair release
+
+Use the new independent backend only; do not alter the legacy service. Configure `PUBLIC_ORIGIN` to the self-hosted UI origin if using the backend UI directly. Sites server proxy calls have no browser Origin header and use Basic authentication over HTTPS. Keep the backend behind TLS and restrict network access where possible. Disable public debug logging and use strong ASCII service credentials.
+
+Set Sites `BACKEND_URL`, `BACKEND_USER`, `BACKEND_PASSWORD` as runtime secrets, then deploy the saved Site version again. Never enter these into frontend code. Python dependencies for verification: `pip install pytest httpx`; run `python -m pytest -q` and `node --test site/worker/test.mjs`.
+
+Production acceptance is pending until a new backend is independently installed and real provider/Telegram tests pass. See TEST_REPORT.md.
