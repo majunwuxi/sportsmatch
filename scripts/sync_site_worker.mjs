@@ -4,10 +4,11 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const workerPath = resolve(root, 'site/worker/index.js');
-const [html, parser, ui, source] = await Promise.all([
+const [html, parser, ui, teamMap, source] = await Promise.all([
   readFile(resolve(root, 'index.html'), 'utf8'),
   readFile(resolve(root, 'ocr-parser.js'), 'utf8'),
   readFile(resolve(root, 'ocr-ui.js'), 'utf8'),
+  readFile(resolve(root, 'teams-map.js'), 'utf8'),
   readFile(workerPath, 'utf8'),
 ]);
 
@@ -18,10 +19,10 @@ if (!prefix && !source.startsWith('const HTML=')) throw new Error('Worker HTML m
 let rest = source.slice(jsonStart);
 const routeMarker = ' const url=new URL(request.url);\n';
 if (!rest.includes(routeMarker)) throw new Error('Worker request router marker is missing.');
-const routes = " const url=new URL(request.url);\n if(url.pathname==='/ocr-parser.js')return new Response(OCR_PARSER,{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});\n if(url.pathname==='/ocr-ui.js')return new Response(OCR_UI,{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});\n";
-// Re-running this sync must replace, not accumulate, the two OCR asset routes.
-rest = rest.replace(/ if\(url\.pathname==='\/ocr-(?:parser|ui)\.js'\)return new Response\(OCR_(?:PARSER|UI),\{headers:\{'content-type':'application\/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'\}\}\);\n/g, '');
+const routes = " const url=new URL(request.url);\n if(url.pathname==='/ocr-parser.js')return new Response(OCR_PARSER,{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});\n if(url.pathname==='/ocr-ui.js')return new Response(OCR_UI,{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});\n if(url.pathname==='/teams-map.js')return new Response(TEAM_MAP_JS,{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});\n";
+// Re-running this sync must replace, not accumulate, the OCR and team map asset routes.
+rest = rest.replace(/ if\(url\.pathname==='\/ocr-(?:parser|ui)\.js'\)return new Response\(OCR_(?:PARSER|UI),\{headers:\{'content-type':'application\/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'\}\}\);\n| if\(url\.pathname==='\/teams-map\.js'\)return new Response\(TEAM_MAP_JS,\{headers:\{'content-type':'application\/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'\}\}\);\n/g, '');
 rest = rest.replace(routeMarker, routes);
-const output = `${prefix}const HTML=${JSON.stringify(html)};\nconst OCR_PARSER=${JSON.stringify(parser)};\nconst OCR_UI=${JSON.stringify(ui)};\n${rest}`;
+const output = `${prefix}const HTML=${JSON.stringify(html)};\nconst OCR_PARSER=${JSON.stringify(parser)};\nconst OCR_UI=${JSON.stringify(ui)};\nconst TEAM_MAP_JS=${JSON.stringify(teamMap)};\n${rest}`;
 await writeFile(workerPath, output);
-console.log('Synced dashboard HTML and local OCR assets into the Sites Worker.');
+console.log('Synced dashboard HTML, OCR assets, and team directory into the Sites Worker.');

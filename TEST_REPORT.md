@@ -233,3 +233,10 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Verification: Python backend suite `38 passed`; OCR parser and Site Worker suite `46/46`; Site Worker build and ESM artifact validation passed. No live backend credentials or fixture API keys were used.
 - Owner-only ChatGPT Site version 31 deployed successfully at https://bm.sendmymail.top and https://wellmax-match-monitor.letnek-majun.chatgpt.site. Site source commit: `7dcc1c0dc807c8424fcc5f674fe9c99810f31e46`; access remains owner-only.
 - The Site deployment updates the frontend. To apply the backend migration on amstd, pull the GitHub main commit and restart only `sportsmatch-web.service`; this session did not access or restart either service, and `napoli-monitor.service` remains untouched.
+
+## 2026-10-21 — Chinese team names and crests in monitoring tasks
+
+- The monitoring cards now use the supplied 347-team directory to show each club's Chinese name, original English name, and crest. Matching uses normalized English team names; U19 names can reuse the senior team's crest while preserving the U19 label.
+- Crests load lazily from the directory's API-Football image host, with referrers disabled and a matching CSP image-host allowlist. The team directory is served as a separate same-origin asset by both the authenticated backend and Sites Worker; no API credentials or database migration are needed.
+- Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 47/47 passed, including 347-record map loading, Club Brugge KV/Lens Chinese names and crest URL, and the image-host CSP. Python backend suite: 39 passed. Site Worker build and ESM artifact validation passed; Python compile and `git diff --check` passed.
+- Owner-only ChatGPT Site version 33 is live at https://bm.sendmymail.top; Site source commit: `f27eebb227c8c37726047e1c1c930a1f7b7bfce0`. The separate amstd backend code is included in GitHub; applying the direct-backend page update requires pulling the commit and restarting only `sportsmatch-web.service`. `napoli-monitor.service` was not accessed or changed.

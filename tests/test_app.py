@@ -155,7 +155,7 @@ def test_total_goals_seven_plus_and_handicap_other_side():
     assert r['payout']==12
 
 def test_auth(client):
-    for path in ['/','/ocr-parser.js','/ocr-ui.js','/api/tasks','/api/fixtures?date=2026-10-20','/api/usage','/api/health']:
+    for path in ['/','/ocr-parser.js','/ocr-ui.js','/teams-map.js','/api/tasks','/api/fixtures?date=2026-10-20','/api/usage','/api/health']:
         assert client.get(path).status_code==401
     assert client.get('/docs').status_code==404
     assert client.post('/api/tasks',headers={'origin':'https://evil.example'}).status_code==403
@@ -369,6 +369,15 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert '网易投注助手比赛链接' not in html and 'bettingLink' not in html and 'netease_betting_assistant_url' not in html
     assert '竞彩单场比分计算' not in html
     assert 'MARKETS={correct_score:"比分"' in html and '半全场' in html
+
+def test_team_map_asset_is_authenticated_and_contains_team_badges(client):
+    assert client.get('/teams-map.js').status_code==401
+    response=client.get('/teams-map.js',auth=('test','test-password'))
+    assert response.status_code==200
+    assert 'javascript' in response.headers['content-type']
+    assert 'MatchMonitorTeamDirectory' in response.text
+    assert 'Club Brugge KV' in response.text and '布鲁日' in response.text
+    assert 'https://media.api-sports.io/football/teams/569.png' in response.text
 
 def test_ocr_assets_are_authenticated_and_local_code_only(client):
     for path, marker in [('/ocr-parser.js','MatchMonitorOCR'),('/ocr-ui.js','createImageBitmap(file)')]:

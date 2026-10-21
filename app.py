@@ -512,3 +512,7 @@ def ocr_parser(_:str=Depends(auth)):
 @app.get("/ocr-ui.js")
 def ocr_ui(_:str=Depends(auth)):
     return FileResponse(Path(__file__).with_name("ocr-ui.js"),media_type="application/javascript",headers={"Cache-Control":"no-store"})
+
+@app.get("/teams-map.js")
+def teams_map(_:str=Depends(auth)):
+    return FileResponse(Path(__file__).with_name("teams-map.js"),media_type="application/javascript",headers={"Cache-Control":"no-store"})
