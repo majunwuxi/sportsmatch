@@ -61,3 +61,11 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Python/FastAPI suite: `25 passed`, including mixed upcoming ordering, inclusion just before the 24-hour cutoff, exclusion after the cutoff, final-time capture, and legacy database migration.
 - No Site source change was required because the Site renders `/api/tasks` in backend order. The already-published owner-private Site remains version 6. The final live page/OCR check is pending owner sign-in approval in the browser; no real screenshot was processed.
 - The custom-domain backend still needs the documented `git pull --ff-only` and restart of only `sportsmatch-web.service` before this behavior is active there. `napoli-monitor.service` was not touched.
+
+## 2026-10-21 — Screenshot-first simulator cleanup
+
+- Removed the NetEase Betting Assistant URL field and its exported JSON property.
+- The manual market, budget, selection table and simulation actions start hidden. They appear after an OCR attempt completes; successful recognition selects the first detected market. The visible “手动模拟” control and failed/empty OCR paths preserve manual entry.
+- Verification: Python/FastAPI `25 passed`; Sites Worker `9 passed`; OCR parser `4 passed`; Worker/OCR JavaScript syntax checks passed. The Worker test checks the hidden initial state, removed link, and reveal/fallback hooks.
+- The owner-private ChatGPT Site was published successfully at version 7: https://wellmax-match-monitor.letnek-majun.chatgpt.site
+- Browser OCR was not exercised against a live screenshot in this pass. No screenshot, betting record, API key, Telegram token, or server credential was included in the source.

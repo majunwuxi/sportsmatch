@@ -198,6 +198,8 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert '竞彩足球比分投注模拟器' in html
     assert '下载JSON文件' in html and '自动均衡分配' in html
     assert 'betScreenshot' in html and 'ocrConfirm' in html and '/ocr-parser.js' in html and '/ocr-ui.js' in html
+    assert 'id="simulatorManual" hidden' in html and 'id="manualMode"' in html
+    assert '网易投注助手比赛链接' not in html and 'bettingLink' not in html and 'netease_betting_assistant_url' not in html
     assert '竞彩单场比分计算' not in html
     assert 'MARKETS={correct_score:"比分"' in html and '半全场' in html
 

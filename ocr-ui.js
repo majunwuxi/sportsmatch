@@ -218,8 +218,7 @@
       home: selected?.home ?? null,
       away: selected?.away ?? null,
       kickoff: selected?.kickoff ?? null,
-      netease_betting_assistant_url: $("bettingLink").value.trim() || null,
-      screenshot_ocr: "browser_local_reviewed",
+            screenshot_ocr: "browser_local_reviewed",
       budget: total,
       tickets,
     };
@@ -229,6 +228,7 @@
     parsedPicks = null;
     clearOcrConfirmation();
     $("ocrReview").hidden = true;
+    $("simulatorManual").hidden = true;
     $("ocrRows").replaceChildren();
     setOcrStatus("图片仅在本机浏览器识别，不会上传到 Match Monitor 后台。请上传投注页面截图。" );
     $("ocrPreview").hidden = true;
@@ -285,6 +285,7 @@
     parsedPicks = null;
     clearOcrConfirmation();
     $("ocrReview").hidden = true;
+    $("simulatorManual").hidden = true;
     if (screenshotUrl) URL.revokeObjectURL(screenshotUrl);
     screenshotFile = null;
     screenshotUrl = null;
@@ -302,6 +303,8 @@
     if (!screenshotFile) return setOcrStatus("请先选择投注页面截图。", true);
     $("runOcr").disabled = true;
     $("ocrReview").hidden = true;
+    $("simulatorManual").hidden = true;
+    parsedPicks = null;
     try {
       setOcrStatus("正在载入中文识别引擎（首次使用需联网下载并缓存）…");
       await loadTesseract();
@@ -321,11 +324,17 @@
       $("ocrReview").hidden = false;
       clearOcrConfirmation();
       renderOcrRows();
+      if (parsedPicks.length) {
+        $("market").value = parsedPicks[0].market;
+        renderRows();
+      }
+      $("simulatorManual").hidden = false;
       const highlighted = parsedPicks.filter((row) => row.highlighted).length;
       setOcrStatus(parsedPicks.length
         ? "识别出 " + parsedPicks.length + " 个候选项，其中 " + highlighted + " 个识别到选中底色。请逐项核对；颜色和OCR都可能误判。"
         : "没有识别到可用投注项。请换一张包含玩法标题、选项和SP的清晰截图，或手动填写模拟器。", !parsedPicks.length);
     } catch (error) {
+      $("simulatorManual").hidden = false;
       setOcrStatus(error?.message || "截图识别失败。请手动选择玩法和填写SP。", true);
     } finally {
       $("runOcr").disabled = false;
@@ -333,16 +342,17 @@
   };
 
   $("clearOcr").onclick = clearOcr;
+  $("manualMode").onclick = () => { $("simulatorManual").hidden = false; $("market").focus(); };
   $("balanceOcr").onclick = () => {
     try { balanceOcrPicks(); }
     catch (error) { setOcrStatus(error.message, true); }
   };
 
   const manualPayload = buildPayload;
-  buildPayload = function () { return parsedPicks ? buildOcrPayload() : manualPayload(); };
+  buildPayload = function () { return parsedPicks?.length ? buildOcrPayload() : manualPayload(); };
   const manualBalance = $("autoBalance").onclick;
   $("autoBalance").onclick = () => {
-    if (!parsedPicks) return manualBalance();
+    if (!parsedPicks?.length) return manualBalance();
     try { balanceOcrPicks(); }
     catch (error) { setOcrStatus(error.message, true); }
   };
