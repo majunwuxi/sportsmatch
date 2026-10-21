@@ -133,3 +133,10 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Verification: OCR parser tests `22 passed`; Site Worker tests `15 passed`; JavaScript syntax checks, Python compile, Site Worker build, artifact validation, and `git diff --check` passed. The deployed owner-private page loaded in the connected browser, and Site access metadata confirmed one owner, zero groups, and zero external visitors.
 - The browser-side OCR engine itself was not run end-to-end against a full-resolution betting screenshot in this turn. The attached image was a screenshot of the dashboard, not the original betting-page image, so no recognition-rate claim is made.
 - Owner-private ChatGPT Site version 20 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site. No user screenshot or betting record was committed. No server was modified; `napoli-monitor.service` was not accessed or changed.
+
+## 2026-10-21 — User-run PaddleOCR screenshot verification
+
+- The user ran the deployed owner-private Site against a betting-page screenshot and shared the result screen. The UI reported PaddleOCR.js (PP-OCRv5, main thread), 31 candidates, seven detected highlighted regions, and seven generated bets; selected labels and SPs were both recognized 7/7.
+- The same run reported per-cell odds at 28/28 and a complete exact-score list at 28/28. The seven selected rows and their odds are visible in the result screen, and the user said the recognition appeared complete and better than the previous engine.
+- This is a successful live smoke test of the deployed browser OCR flow on one user-provided image. The result screen is not a retained original-image/ground-truth pair, so it does not establish a general accuracy rate. The uploaded image and private betting data were not committed.
+- No production server, API-Football key, Telegram token, or `napoli-monitor.service` was accessed or changed.
