@@ -87,7 +87,8 @@
     const body = $("ocrRows");
     body.replaceChildren();
     if (!parsedPicks) return;
-    const totalStake = selectedPicks().reduce((sum, item) => sum + Number(item.stake || 0), 0);
+    const stakesByMarket = new Map();
+    for (const item of selectedPicks()) stakesByMarket.set(item.market, (stakesByMarket.get(item.market) || 0) + Number(item.stake || 0));
     const visiblePicks = parsedPicks.filter((pick) => pick.highlighted || pick.enabled || showAllCandidates);
     if (!visiblePicks.length) {
       const row = document.createElement("tr");
@@ -98,6 +99,7 @@
       body.append(row);
     }
     for (const pick of visiblePicks) {
+      const totalStake = stakesByMarket.get(pick.market) || 0;
       const index = parsedPicks.indexOf(pick);
       const tr = document.createElement("tr");
       const checkCell = document.createElement("td");
@@ -189,28 +191,46 @@
     tr.classList.toggle("ocr-invalid", !state.ok);
     const resultCell = tr.children[6];
     const returnAmount = Number(pick.stake || 0) * Number(pick.odds || 0);
-    const total = selectedPicks().reduce((sum, item) => sum + Number(item.stake || 0), 0);
+    const total = selectedPicks().filter((item) => item.market === pick.market)
+      .reduce((sum, item) => sum + Number(item.stake || 0), 0);
+    const net = returnAmount - total;
     resultCell.textContent = state.ok
-      ? "返 " + money(returnAmount) + " · 净 " + (returnAmount - total >= 0 ? "+" : "") + money(returnAmount - total)
+      ? "返 " + money(returnAmount) + " · 净 " + signedProfit(net)
       : state.reason;
-    resultCell.className = state.ok ? "good" : "bad";
+    resultCell.className = state.ok ? (net >= 0 ? "good" : "bad") : "bad";
     updateOcrTotals();
+  }
+
+  function signedProfit(value) {
+    return (value >= 0 ? "+" : "-") + money(Math.abs(value));
   }
 
   function updateOcrTotals() {
     if (!parsedPicks) return;
     const picks = selectedPicks();
     const total = picks.reduce((sum, item) => sum + Number(item.stake || 0), 0);
-    for (const row of parsedPicks) row.totalStake = total;
-    const valid = picks.filter((pick) => validateRow(pick).ok && Number(pick.stake) >= 2);
-    const minimum = valid.length ? Math.min(...valid.map((pick) => Number(pick.stake) * Number(pick.odds) - total)) : null;
+    const groups = new Map();
+    for (const pick of picks) {
+      if (!groups.has(pick.market)) groups.set(pick.market, { picks: [], total: 0 });
+      const group = groups.get(pick.market);
+      group.picks.push(pick);
+      group.total += Number(pick.stake || 0);
+    }
+    for (const row of parsedPicks) row.totalStake = groups.get(row.market)?.total || 0;
     const highlighted = parsedPicks.filter((pick) => pick.highlighted).length;
     $("ocrSelectedCount").textContent = "已选 " + picks.length + " 项";
     $("ocrSelectedTotal").textContent = money(total);
     $("ocrCount").textContent = "候选 " + parsedPicks.length + " 项 · 深色选区 " + selectionRegionCount + " 块 · 按选区建单 " + highlighted + " 项 · 当前勾选 " + picks.length + " 项 · 投入 " + money(total);
-    $("ocrProfit").textContent = minimum === null
-      ? "尚无已勾选的投注项。"
-      : "单项命中时净利润区间：" + money(minimum) + " 至 " + money(Math.max(...valid.map((pick) => Number(pick.stake) * Number(pick.odds) - total))) + "。跨玩法同时命中时返奖会叠加。";
+    const marketSummaries = [...groups.entries()].map(([market, group]) => {
+      const valid = group.picks.filter((pick) => validateRow(pick).ok && Number(pick.stake) >= 2);
+      if (!valid.length) return (MARKETS[market] || "未知玩法") + "投注额 " + money(group.total) + "，待补充有效SP和金额";
+      const profits = valid.map((pick) => Number(pick.stake) * Number(pick.odds) - group.total);
+      return (MARKETS[market] || "未知玩法") + "投注额 " + money(group.total) + "，单项命中净利润 " +
+        signedProfit(Math.min(...profits)) + " 至 " + signedProfit(Math.max(...profits));
+    });
+    $("ocrProfit").textContent = marketSummaries.length
+      ? marketSummaries.join("；") + "。各玩法分别核算，跨玩法同时命中时返奖和净利润相加。"
+      : "尚无已勾选的投注项。";
   }
 
   function balanceOcrPicks() {

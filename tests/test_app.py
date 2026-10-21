@@ -94,7 +94,28 @@ def test_mixed_markets_only_pay_selections_that_win():
     ]
     r=m.outcome(1,0,tickets,None,None)
     assert [x['won'] for x in r['tickets']]==[True,False,False,None]
-    assert r['payout']==16 and r['net']==8 and r['pending_tickets']==1
+    assert r['payout']==16 and r['net'] is None and r['pending_tickets']==1
+    groups={x['market']:x for x in r['market_summaries']}
+    assert groups['correct_score']['total']==2 and groups['correct_score']['payout']==16 and groups['correct_score']['net']==14
+    assert groups['half_full']['pending_tickets']==1 and groups['half_full']['net'] is None
+
+def test_mixed_market_profit_is_settled_and_summed_per_market():
+    tickets=[
+        {'market':'correct_score','selection':'2:1','stake':4,'odds':7},
+        {'market':'correct_score','selection':'2:2','stake':2,'odds':11.5},
+        {'market':'total_goals','selection':'3','stake':8,'odds':3.75},
+        {'market':'total_goals','selection':'4','stake':6,'odds':4.1},
+    ]
+    result=m.outcome(2,1,tickets)
+    groups={row['market']:row for row in result['market_summaries']}
+    assert groups['correct_score']=={
+        'market':'correct_score','market_label':'比分','total':6.0,'payout':28.0,'net':22.0,'tickets':2,'pending_tickets':0,
+    }
+    assert groups['total_goals']=={
+        'market':'total_goals','market_label':'总进球','total':14.0,'payout':30.0,'net':16.0,'tickets':2,'pending_tickets':0,
+    }
+    assert sum(row['net'] for row in groups.values())==result['net']==38.0
+    assert result['total']==20.0 and result['payout']==58.0
 
 def test_total_goals_seven_plus_and_handicap_other_side():
     r=m.outcome(4,3,[{'market':'total_goals','selection':'7+','stake':2,'odds':2},{'market':'handicap','selection':'平','handicap':-1,'stake':2,'odds':4}])

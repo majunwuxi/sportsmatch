@@ -141,22 +141,35 @@ def outcome(home,away,tickets,half_home=None,half_away=None,listed_scores=None):
     total=sum((Decimal(str(t["stake"])) for t in tickets), Decimal(0))
     payout=Decimal(0)
     rows=[]
+    by_market={}
     for index,t in enumerate(tickets):
         stake=Decimal(str(t["stake"]))
         won=ticket_matches(t,home,away,half_home,half_away,listed_scores)
         amount=stake*Decimal(str(t["odds"])) if won else Decimal(0)
         payout+=amount
-        rows.append({"index":index,"market":t.get("market","correct_score"),"market_label":MARKETS.get(t.get("market","correct_score"),"未知玩法"),
+        market=t.get("market","correct_score")
+        group=by_market.setdefault(market,{"market":market,"market_label":MARKETS.get(market,"未知玩法"),"total":Decimal(0),"payout":Decimal(0),"tickets":0,"pending_tickets":0})
+        group["total"]+=stake
+        group["tickets"]+=1
+        if won is None:
+            group["pending_tickets"]+=1
+        else:
+            group["payout"]+=amount
+        rows.append({"index":index,"market":market,"market_label":MARKETS.get(market,"未知玩法"),
             "selection":t["selection"],"handicap":t.get("handicap"),"stake":float(stake),"share_pct":float((stake*100/total).quantize(Decimal("0.01"),rounding=ROUND_HALF_UP)) if total else 0,
             "odds":float(t["odds"]),"won":won,"payout":float(amount.quantize(Decimal("0.01"),rounding=ROUND_HALF_UP))})
     money=lambda n:float(n.quantize(Decimal("0.01"),rounding=ROUND_HALF_UP))
+    market_summaries=[{"market":g["market"],"market_label":g["market_label"],"total":money(g["total"]),"payout":money(g["payout"]),
+        "net":money(g["payout"]-g["total"]) if g["pending_tickets"]==0 else None,"tickets":g["tickets"],"pending_tickets":g["pending_tickets"]}
+        for g in by_market.values()]
     selection=score_category(home,away,listed_scores) if home is not None and away is not None else None
     has_score=home is not None and away is not None
-    return {"selection":selection,"payout":money(payout),"net":money(payout-total) if has_score else None,"total":money(total),"tickets":rows,"has_score":has_score,
+    pending_tickets=sum(1 for row in rows if row["won"] is None)
+    return {"selection":selection,"payout":money(payout),"net":money(payout-total) if has_score and pending_tickets==0 else None,"total":money(total),"tickets":rows,"market_summaries":market_summaries,"has_score":has_score,
         "score_list_source":"截图SP识别清单" if listed_scores is not None else "标准竞彩比分表",
         "listed_scores_count":len(listed_scores) if listed_scores is not None else len(LISTED_SCORE_OPTIONS),
         "halftime_score":f"{half_home}:{half_away}" if half_home is not None and half_away is not None else None,
-        "pending_tickets":sum(1 for row in rows if row["won"] is None)}
+        "pending_tickets":pending_tickets}
 
 def tick(task):
     # Serialize polling against schedule edits and deletion. Reload after taking
