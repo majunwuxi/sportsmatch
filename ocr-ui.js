@@ -365,8 +365,11 @@
         }
 
         const labelWhitelist = "0123456789:.+OQZz胜平负其他主客";
-        const labelEnd = Math.min(base.cropHeight, paddingY + contentHeight * 0.72);
-        const oddsStart = Math.max(0, paddingY + contentHeight * 0.32);
+        // Keep option and SP recognition bands close to their visual rows.
+        // The previous broad overlap let small odds such as 18 leak into the
+        // option pass and made partial labels look competitive with real ones.
+        const labelEnd = Math.min(base.cropHeight, paddingY + contentHeight * 0.58);
+        const oddsStart = Math.max(0, paddingY + contentHeight * 0.54);
         const labelPasses = [];
         const oddsPasses = [];
         const candidates = [];
@@ -473,7 +476,15 @@
       try {
         const result = await worker.recognize(canvases.ocr, {}, { blocks: true });
         const pageWords = flattenOcrWords(result.data);
-        const cropResults = await recognizeSelectedRegions(worker, canvases.color, canvases.ocr, selectionRegions);
+        const cropResults = await recognizeSelectedRegions(
+          worker,
+          canvases.color,
+          canvases.ocr,
+          selectionRegions,
+          pageWords,
+          canvases.width,
+          canvases.height,
+        );
         const enhancedWords = MatchMonitorOCR.mergeSelectedRegionWords(pageWords, cropResults);
         const pageCandidates = MatchMonitorOCR.parse(enhancedWords, canvases.width, canvases.height,
           (bbox) => MatchMonitorOCR.containsSelectedRegion(bbox, selectionRegions));

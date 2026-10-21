@@ -162,6 +162,25 @@ test('scores crop OCR using the page market and preserves SP when its option lab
   assert.equal(completeRow.unrecognized, false);
 });
 
+test('uses correct-score context to prefer complete score labels over clipped score and result text', () => {
+  const region = { x0: 100, y0: 100, x1: 200, y1: 150 };
+  const metadata = { region, scaleX: 4, scaleY: 4, cropWidth: 480, cropHeight: 280, offsetX: 40, offsetY: 40 };
+  const pageWords = [word('比分', 180, 20)];
+  const cases = [
+    { partial: [word('2', 180, 60, 94), word('13', 180, 160, 96)], complete: [word('2:0', 165, 60, 90, 44), word('13', 180, 160, 96)] },
+    { partial: [word('0', 180, 60, 94), word('31', 180, 160, 96)], complete: [word('0:3', 165, 60, 90, 44), word('31', 180, 160, 96)] },
+    { partial: [word('负', 180, 60, 94), word('50', 180, 160, 96)], complete: [word('负其他', 160, 60, 90, 56), word('50', 180, 160, 96)] },
+  ];
+  for (const { partial, complete } of cases) {
+    const incomplete = { ...metadata, words: partial };
+    const recovered = { ...metadata, words: complete };
+    assert.ok(parser.scoreSelectedCrop(recovered, pageWords, 400, 400) > parser.scoreSelectedCrop(incomplete, pageWords, 400, 400));
+    const row = parser.parseSelectedRegions([recovered], pageWords, 400, 400)[0];
+    assert.equal(row.unrecognized, false);
+    assert.equal(parser.validatePick({ market: row.market, selection: row.selection, odds: row.odds }).ok, true);
+  }
+});
+
 test('matches every detected selection when a score label is OCR-split and an other-score label is Chinese', () => {
   const regions = [
     { x0: 40, y0: 100, x1: 140, y1: 150 },
@@ -232,11 +251,14 @@ test('root page and Sites Worker serve the same OCR assets without sending the i
   assert.equal(await uiResponse.text(), uiSource);
   assert.match(uiSource, /worker\.recognize\(canvases\.ocr/);
   assert.match(uiSource, /recognizeSelectedRegions/);
+  assert.match(uiSource, /recognizeSelectedRegions\([\s\S]*?selectionRegions,[\s\S]*?pageWords,[\s\S]*?canvases\.width,[\s\S]*?canvases\.height/);
   assert.match(uiSource, /mergeSelectedRegionWords/);
   assert.match(uiSource, /SINGLE_BLOCK/);
   assert.match(uiSource, /selectionWhitelist/);
   assert.match(uiSource, /scoreSelectedCrop/);
   assert.match(uiSource, /recognizeBand/);
+  assert.match(uiSource, /contentHeight \* 0\.58/);
+  assert.match(uiSource, /contentHeight \* 0\.54/);
   assert.match(uiSource, /SINGLE_LINE/);
   assert.match(uiSource, /parseSelectedRegions/);
   assert.match(uiSource, /按选区建立/);

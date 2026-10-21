@@ -38,7 +38,7 @@ Worker tests: 8 passed, including edge redirect compatibility and rejection of u
 - Frontend JavaScript: `node --check` passed.
 - Sites Worker build, ESM artifact validation, and proxy/UI suite: `8 passed`. The tests cover the new simulator and JSON actions, private visitor checks, same-origin writes, route allowlisting, credentials kept server-side, UTF-8 Basic auth, and redirect rejection.
 - Sites deployment: private version 5 succeeded at https://wellmax-match-monitor.letnek-majun.chatgpt.site.
-- Simulator allocation was verified with synthetic odds and budgets; unit tests check stake totals and expected returns.
+- Simulator allocation was checked against the screenshot example (SP 13, 17, 24, 41, 55, 60, 19; budget ¥124): it allocates ¥32, ¥26, ¥18, ¥10, ¥8, ¥8, and ¥22 respectively, with gross returns ¥416, ¥442, ¥432, ¥410, ¥440, ¥480, and ¥418.
 
 The user confirmed that backend commit `ca5b33d` is active and its authenticated health probe returned `ok: true` and `poller: true`. The OCR release below adds two new authenticated frontend-asset routes and still requires a separate pull/restart of only `sportsmatch-web.service`. This update did not trigger a real API-Football fixture update or Telegram message. No credentials or private betting data were added to the repository. The existing Napoli service was not accessed or changed.
 
@@ -70,51 +70,12 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - The owner-private ChatGPT Site was published successfully at version 7: https://wellmax-match-monitor.letnek-majun.chatgpt.site
 - Browser OCR was not exercised against a live screenshot in this pass. No screenshot, betting record, API key, Telegram token, or server credential was included in the source.
 
-## 2026-10-21 — Screenshot OCR loading and preview fix
+## 2026-10-21 — OCR option context and split recovery
 
-- Root cause: the private Site CSP blocked the Tesseract.js CDN, WASM compilation, worker creation, and `blob:` screenshot preview. The allowlist now permits only jsDelivr and the Tesseract language-data host required by the browser OCR flow, plus local blob previews/workers. No wildcard origins or client-side secrets were added.
-- Verification: Sites Worker tests `10 passed`; artifact build and ESM validation passed. The private Site was redeployed as version 8. A live user screenshot has not yet been reprocessed in the browser.
-- No API key, Telegram token, server credential, or screenshot was committed.
-
-
-## 2026-10-21 — Selected-ticket screenshot OCR correction
-
-- Root cause: the parser surfaced unselected market options as candidates, while the white text on selected dark cells was not reliably recognized. The screenshot was processed in grayscale without an inversion step scoped to selected cells.
-- Fix: detect connected dark selected regions in the local screenshot, exclude the full-width confirmation bar, binarize and invert selected regions before OCR, and show only candidates intersecting a selected region by default. Other candidates remain available behind “显示其他未选候选项”; manual review remains available. Image pixels stay in the browser and are not sent to the backend.
-- Screenshot check: dark-fill detection found five selected regions and excluded the bottom confirmation button. The image was processed locally and is not stored in the repository.
-- Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` passed (15 tests); Site Worker tests passed (10 tests); Worker syntax check, Site build, and ESM artifact validation passed.
-- Scope: selection-region detection was checked against the supplied image. Full Chinese OCR end-to-end reprocessing in a live browser has not been performed yet, so the user should verify the selected labels and SP values after refreshing the private Site.
-- No API key, Telegram token, server credential, or private betting record was committed.
-## 2026-10-21 — Selected-cell OCR zoom follow-up
-
-- Regression reproduced with the supplied 749×902 ticket image: dark-fill detection found five selected cells, while whole-page OCR matched only two picks.
-- The browser now crops and enlarges each detected selected cell (up to 4×), recognizes it as a single text block, and maps crop word coordinates back to the source image. When a crop contains a supported selection label, its text and SP replace the whole-page OCR words inside that cell; otherwise, the whole-page OCR result is retained as a fallback. The review count shows dark regions and matched picks separately and warns when they differ.
-- Screenshot diagnostic: the local English model recognized several numeric score labels; Chinese-language OCR could not be independently verified locally because chi_sim trained data is unavailable.
-- Verification: root OCR/Worker tests passed (16 tests); Site Worker tests passed (10 tests); Worker syntax, Site build, and ESM artifact validation passed.
-- No API key, Telegram token, server credential, private betting record, or screenshot was committed.
-
-
-## 2026-10-21 — Selected-cell OCR confidence follow-up
-
-- Each detected cell is now recognized from both its original color crop and the enhanced crop with white padding. A restricted options character set is used, and the supported label with the higher OCR confidence is retained.
-- Crop padding is removed when translating word boxes back to screenshot coordinates. Common score-label OCR substitutions are repaired only in the upper label area, preventing SP values below from being reinterpreted as scores.
-- Synthetic OCR regression tests cover four selected regions, a split score token, a Chinese other-score label, odds pairing, and crop-coordinate mapping. Root OCR/Worker tests: 18 passed. Sites Worker tests: 10 passed. Build and ESM artifact validation passed.
-- Private Site version 11 deployed successfully. Full Chinese OCR reprocessing of the uploaded screenshot in a live browser remains unverified in this environment.
-- The current report contains no screenshot or real selection/SP list. No API key, Telegram token, or server credential was added.
-
-
-## 2026-10-21 — Deep selection regions create picks directly
-
-- Each detected dark selection region now creates its own enabled, editable betting row. Selection rows do not depend on matching the global candidate list.
-- Recognition uses the enlarged region crop first, then falls back to full-page OCR words whose text boxes lie inside that same region. If the option or SP remains unreadable, the row stays visible and flagged for manual review.
-- The OCR status now reports option and SP recognition counts per region. Screenshot processing remains in the browser; screenshots and private ticket data are not uploaded or included in the repository.
-- Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 19 passed. Sites Worker tests: 10 passed. Build, ESM artifact validation, JavaScript syntax checks, and `git diff --check` passed.
-- Private Site version 12 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site. No amstd services were touched.
-
-## 2026-10-21 — Selected-cell OCR line recovery
-
-- Each highlighted betting cell now gets separate single-line OCR passes for the option and SP, using original-color and locally binarized crops; the strongest label and odds passes are combined and scored together.
-- Candidate labels are evaluated against the screenshot's current market section. For example, a bare “负” is no longer accepted as a valid “比分” option; “负其他” is required. If the label remains uncertain, the selected row remains editable and retains any independently recognized SP for manual review.
-- Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 20 passed; the Site Worker suite — 10 passed; build, ESM artifact validation, syntax checks, and `git diff --check` passed.
-- Owner-private Site version 13 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site. Access remains owner-only.
-- The user screenshot itself was not committed or sent to the backend. Full Chinese OCR reprocessing against the original betting image remains a user-side check because that original image is not available in the source workspace and local Tesseract lacks `chi_sim` data. No API key, Telegram token, server credential, or private betting record was committed.
+- Fixed the selected-crop OCR call to pass the full-page OCR words and screenshot dimensions into candidate scoring. Without that context, a clipped label such as “负” could be evaluated under the wrong market before the row was parsed against the correct-score section.
+- Narrowed the overlap between the option and SP OCR bands. The label pass now emphasizes the upper option line, while the odds pass emphasizes the lower SP line.
+- Added regression cases for incomplete score labels and “负” versus “负其他”; incomplete labels lose to a valid label in the screenshot's “比分” context. The exact screenshot and its private ticket data are not used as fixtures or committed.
+- Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 21 passed; syntax checks, Sites Worker build, ESM artifact validation, and `git diff --check` passed.
+- Browser OCR was not re-run against the original full-resolution betting screenshot because only the application screenshot with a small embedded preview was available. Test the same image again after the private Site update and inspect the four selected labels/SP values before use.
+- Owner-private Site version 14 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site. The four-row output still needs confirmation using the original full-resolution screenshot.
+- No backend, API-Football, Telegram, secrets, or amstd services were changed. `napoli-monitor.service` was not accessed.
