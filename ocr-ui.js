@@ -304,6 +304,126 @@
     });
   }
 
+  const paddleOcrOptions = {
+    lang: "ch",
+    ocrVersion: "PP-OCRv5",
+    worker: true,
+    ortOptions: {
+      backend: "wasm",
+      wasmPaths: "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/",
+      numThreads: 1,
+      simd: true,
+    },
+  };
+
+  function paddleResultsToWords(result) {
+    return MatchMonitorOCR.paddleWordsFromResult(result);
+  }
+
+  async function createTesseractWorker() {
+    await loadTesseract();
+    return Tesseract.createWorker(["chi_sim", "eng"], 1, {
+      logger: (event) => {
+        if (event.status) setOcrStatus("截图识别中（备用引擎）: " + event.status + (event.progress ? " " + Math.round(event.progress * 100) + "%" : ""));
+      },
+    });
+  }
+
+  async function createOcrWorker() {
+    let PaddleOCR;
+    let paddle = null;
+    let tesseract = null;
+    let engine = "paddle-worker";
+    let fallbackNotice = "";
+    const createPaddle = async (worker) => PaddleOCR.create({ ...paddleOcrOptions, worker });
+    const getTesseract = async (reason) => {
+      if (!tesseract) {
+        fallbackNotice = reason ? String(reason.message || reason).slice(0, 180) : "PaddleOCR.js不可用";
+        setOcrStatus("PaddleOCR.js不可用，正在切换 Tesseract.js 备用识别…");
+        tesseract = await createTesseractWorker();
+      }
+      engine = "tesseract";
+      return tesseract;
+    };
+
+    try {
+      setOcrStatus("正在载入 PaddleOCR.js（PP-OCRv5）…首次使用需要联网下载模型。");
+      ({ PaddleOCR } = await import("https://cdn.jsdelivr.net/npm/@paddleocr/paddleocr-js@0.4.2/dist/index.mjs"));
+      try {
+        paddle = await createPaddle(true);
+      } catch (workerError) {
+        setOcrStatus("正在切换 PaddleOCR.js 浏览器主线程模式…");
+        paddle = await createPaddle(false);
+        engine = "paddle-main";
+      }
+    } catch (error) {
+      await getTesseract(error);
+    }
+
+    async function runPaddle(images) {
+      try {
+        return await paddle.predict(images);
+      } catch (workerError) {
+        if (engine === "paddle-worker") {
+          try {
+            await paddle.dispose();
+            paddle = await createPaddle(false);
+            engine = "paddle-main";
+            setOcrStatus("PaddleOCR.js已切换到浏览器主线程，继续本地识别…");
+            return await paddle.predict(images);
+          } catch (mainThreadError) {
+            await getTesseract(mainThreadError);
+          }
+        } else {
+          await getTesseract(workerError);
+        }
+        return null;
+      }
+    }
+
+    return {
+      get engineName() {
+        return engine === "paddle-worker" ? "PaddleOCR.js（PP-OCRv5）"
+          : engine === "paddle-main" ? "PaddleOCR.js（PP-OCRv5，主线程）"
+            : "Tesseract.js（备用）";
+      },
+      get fallbackNotice() { return fallbackNotice; },
+      setParameters: async (parameters) => {
+        if (engine === "tesseract") await tesseract.setParameters(parameters);
+      },
+      recognize: async (image, ...args) => {
+        if (engine === "tesseract") return tesseract.recognize(image, ...args);
+        const results = await runPaddle([image]);
+        return results ? { data: { words: paddleResultsToWords(results[0]) } } : tesseract.recognize(image, ...args);
+      },
+      recognizeBatch: async (images) => {
+        const recognizeTesseractBatch = async () => {
+          const groups = [];
+          for (const image of images) groups.push(flattenOcrWords((await tesseract.recognize(image, {}, { blocks: true })).data));
+          return groups;
+        };
+        if (engine === "tesseract") return recognizeTesseractBatch();
+        const results = await runPaddle(images);
+        return results ? results.map(paddleResultsToWords)
+          : recognizeTesseractBatch();
+      },
+      terminate: async () => {
+        if (paddle?.dispose) await paddle.dispose();
+        if (tesseract?.terminate) await tesseract.terminate();
+      },
+    };
+  }
+
+  function createBandCanvas(crop, top, bottom) {
+    const y0 = Math.max(0, Math.floor(top));
+    const y1 = Math.min(crop.height, Math.max(y0 + 1, Math.ceil(bottom)));
+    const band = document.createElement("canvas");
+    band.width = crop.width;
+    band.height = y1 - y0;
+    band.getContext("2d").drawImage(crop, 0, y0, crop.width, band.height, 0, 0, crop.width, band.height);
+    return { canvas: band, offsetY: y0 };
+  }
+
   function flattenOcrWords(data) {
     if (Array.isArray(data?.words) && data.words.length) return data.words;
     const words = [];
@@ -325,15 +445,10 @@
   }
 
   async function recognizeBand(worker, crop, top, bottom, psmMode, whitelist) {
-    const y0 = Math.max(0, Math.floor(top));
-    const y1 = Math.min(crop.height, Math.max(y0 + 1, Math.ceil(bottom)));
-    const band = document.createElement("canvas");
-    band.width = crop.width;
-    band.height = y1 - y0;
-    band.getContext("2d").drawImage(crop, 0, y0, crop.width, band.height, 0, 0, crop.width, band.height);
+    const { canvas: band, offsetY } = createBandCanvas(crop, top, bottom);
     await worker.setParameters({ tessedit_pageseg_mode: psmMode, tessedit_char_whitelist: whitelist });
     const result = await worker.recognize(band, {}, { blocks: true });
-    return shiftOcrWords(flattenOcrWords(result.data), y0);
+    return shiftOcrWords(flattenOcrWords(result.data), offsetY);
   }
 
   async function recognizeSelectedRegions(worker, colorCanvas, ocrCanvas, regions, pageWords, pageWidth, pageHeight) {
@@ -388,12 +503,27 @@
         // Keep the original whole-cell read as a fallback, while separately
         // reading the label and SP lines from both original and binarized pixels.
         setOcrStatus("正在分行识别选区选项与SP：" + (index + 1) + "/" + regions.length + "…");
-        await worker.setParameters({ tessedit_pageseg_mode: psm.SINGLE_BLOCK || "6", tessedit_char_whitelist: selectionWhitelist });
-        const fullResult = await worker.recognize(crops[0], {}, { blocks: true });
-        candidates.push({ ...base, words: flattenOcrWords(fullResult.data), recognition: "whole-cell" });
-        for (const crop of crops) {
-          labelPasses.push(await recognizeBand(worker, crop, 0, labelEnd, psm.SINGLE_LINE || "7", labelWhitelist));
-          oddsPasses.push(await recognizeBand(worker, crop, oddsStart, base.cropHeight, psm.SINGLE_LINE || "7", oddsWhitelist));
+        if (worker.engineName.startsWith("PaddleOCR.js") && typeof worker.recognizeBatch === "function") {
+          const bands = crops.map((crop) => ({
+            label: createBandCanvas(crop, 0, labelEnd),
+            odds: createBandCanvas(crop, oddsStart, base.cropHeight),
+          }));
+          const inputs = [crops[0], ...bands.flatMap((item) => [item.label.canvas, item.odds.canvas])];
+          const words = await worker.recognizeBatch(inputs);
+          candidates.push({ ...base, words: words[0] || [], recognition: "whole-cell" });
+          bands.forEach((item, cropIndex) => {
+            const start = 1 + cropIndex * 2;
+            labelPasses.push(words[start] || []);
+            oddsPasses.push(shiftOcrWords(words[start + 1] || [], item.odds.offsetY));
+          });
+        } else {
+          await worker.setParameters({ tessedit_pageseg_mode: psm.SINGLE_BLOCK || "6", tessedit_char_whitelist: selectionWhitelist });
+          const fullResult = await worker.recognize(crops[0], {}, { blocks: true });
+          candidates.push({ ...base, words: flattenOcrWords(fullResult.data), recognition: "whole-cell" });
+          for (const crop of crops) {
+            labelPasses.push(await recognizeBand(worker, crop, 0, labelEnd, psm.SINGLE_LINE || "7", labelWhitelist));
+            oddsPasses.push(await recognizeBand(worker, crop, oddsStart, base.cropHeight, psm.SINGLE_LINE || "7", oddsWhitelist));
+          }
         }
         // Pair the clearest label pass with each SP pass. This lets Chinese or
         // score text and the smaller numeric odds use different preprocessing.
@@ -428,9 +558,8 @@
   async function recognizeScoreGridCells(worker, sourceCanvas, grid, passName, selectionRegions = [], threshold = 190) {
     if (!grid?.cells?.length) return [];
     const psm = globalThis.Tesseract?.PSM || {};
-    const results = [];
-    for (let index = 0; index < grid.cells.length; index++) {
-      const cell = grid.cells[index];
+    const prepared = [];
+    for (const cell of grid.cells) {
       const region = cell.region;
       const sourceWidth = Math.max(1, region.x1 - region.x0);
       const sourceHeight = Math.max(1, region.y1 - region.y0);
@@ -460,9 +589,29 @@
       // below it; crop only that band so a missing decimal or nearby score
       // digits cannot be mistaken for the odds.
       const oddsStart = Math.min(crop.height - 1, paddingY + contentHeight * 0.66);
-      setOcrStatus("正在逐格识别比分 SP：" + (index + 1) + "/" + grid.cells.length + "（" + passName + "）…");
-      const words = await recognizeBand(worker, crop, oddsStart, crop.height, psm.SINGLE_LINE || "7", oddsWhitelist);
-      results.push({ ...cell, words, cropWidth: crop.width, cropHeight: crop.height });
+      const band = createBandCanvas(crop, oddsStart, crop.height);
+      prepared.push({ cell, crop, band });
+    }
+    setOcrStatus("正在逐格识别比分 SP：" + prepared.length + " 项（" + passName + "）…");
+    if (worker.engineName.startsWith("PaddleOCR.js") && typeof worker.recognizeBatch === "function") {
+      const wordGroups = await worker.recognizeBatch(prepared.map((item) => item.band.canvas));
+      return prepared.map((item, index) => ({
+        ...item.cell,
+        words: shiftOcrWords(wordGroups[index] || [], item.band.offsetY),
+        cropWidth: item.crop.width,
+        cropHeight: item.crop.height,
+      }));
+    }
+    const results = [];
+    for (const item of prepared) {
+      await worker.setParameters({ tessedit_pageseg_mode: psm.SINGLE_LINE || "7", tessedit_char_whitelist: oddsWhitelist });
+      const read = await worker.recognize(item.band.canvas, {}, { blocks: true });
+      results.push({
+        ...item.cell,
+        words: shiftOcrWords(flattenOcrWords(read.data), item.band.offsetY),
+        cropWidth: item.crop.width,
+        cropHeight: item.crop.height,
+      });
     }
     return results;
   }
@@ -528,17 +677,13 @@
     let scoreGrid = null;
     let scoreGridRows = [];
     try {
-      setOcrStatus("正在载入中文识别引擎（首次使用需联网下载并缓存）…");
-      await loadTesseract();
+      setOcrStatus("正在载入 PaddleOCR.js（首次使用需联网下载并缓存模型）…");
       const canvases = await imageCanvases(screenshotFile);
       const selectionRegions = detectSelectedRegions(canvases.color, canvases.ocr);
       selectionRegionCount = selectionRegions.length;
-      const worker = await Tesseract.createWorker(["chi_sim", "eng"], 1, {
-        logger: (event) => {
-          if (event.status) setOcrStatus("截图识别中：" + event.status + (event.progress ? " " + Math.round(event.progress * 100) + "%" : ""));
-        },
-      });
+      const worker = await createOcrWorker();
       try {
+        setOcrStatus("正在识别截图，当前引擎：" + worker.engineName + "…");
         const result = await worker.recognize(canvases.ocr, {}, { blocks: true });
         const pageWords = flattenOcrWords(result.data);
         const cropResults = await recognizeSelectedRegions(
@@ -613,13 +758,14 @@
       const gridStatus = scoreGrid
         ? "逐格识别 SP " + gridScoreCount + "/28；缺失SP的标准比分仍列入候选项，可展开补录"
         : "未能自动定位比分表格";
-      setOcrStatus(parsedPicks.length
+      const engineStatus = "识别引擎：" + worker.engineName + (worker.fallbackNotice ? "（" + worker.fallbackNotice + "）" : "") + "。";
+      setOcrStatus(engineStatus + (parsedPicks.length
         ? highlighted
           ? "识别出 " + parsedPicks.length + " 个候选项，检测到 " + selectionRegionCount + " 块深色选区，并按选区建立 " + highlighted + " 条投注项（选项识别 " + recognizedLabels + "/" + selectionRegionCount + "，SP识别 " + recognizedOdds + "/" + selectionRegionCount + "）。" + gridStatus + "；精确比分清单当前有 " + listedScoreCount + "/28 项，请对照截图核对。"
           : selectionRegionCount
             ? "检测到 " + selectionRegionCount + " 块深色选区，但未能建立选区记录。" + gridStatus + "；精确比分清单当前有 " + listedScoreCount + "/28 项，请核对清单。"
             : "识别到 " + parsedPicks.length + " 个候选项，但没有检测到深色底选项，因此没有自动勾选。" + gridStatus + "；精确比分清单当前有 " + listedScoreCount + "/28 项，请核对清单。"
-        : "没有识别到可用投注项。请换一张包含玩法标题、选项和SP的清晰截图，或手动填写模拟器。", !parsedPicks.length);
+        : "没有识别到可用投注项。请换一张包含玩法标题、选项和SP的清晰截图，或手动填写模拟器。"), !parsedPicks.length);
     } catch (error) {
       $("simulatorManual").hidden = false;
       setOcrStatus(error?.message || "截图识别失败。请手动选择玩法和填写SP。", true);

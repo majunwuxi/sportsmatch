@@ -713,6 +713,24 @@
     return [...retained, ...enhanced];
   }
 
+  function paddleWordsFromResult(result) {
+    return (result?.items || []).flatMap((item) => {
+      const polygon = Array.isArray(item?.poly) ? item.poly : [];
+      const points = polygon.filter((point) => Array.isArray(point) && point.length >= 2)
+        .map((point) => [Number(point[0]), Number(point[1])])
+        .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+      if (!points.length || !normalize(item?.text)) return [];
+      const xs = points.map((point) => point[0]);
+      const ys = points.map((point) => point[1]);
+      const score = Number(item.score);
+      return [{
+        text: String(item.text),
+        confidence: Number.isFinite(score) ? Math.max(0, Math.min(100, Math.round(score * 100))) : 0,
+        bbox: { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) },
+      }];
+    });
+  }
+
   function invertGrayPixels(data) {
     for (let offset = 0; offset < data.length; offset += 4) {
       // The selected-cell text is white; binarize it against a white background.
@@ -724,5 +742,5 @@
     return data;
   }
 
-  root.MatchMonitorOCR = { parse, parseSelectedRegions, parseScoreGridCells, preferScoreOdds, preprocessScoreOddsPixels, inferScoreGrid, scoreGridRows, scoreSelectedCrop, marketAt, validatePick, normalize, listedScoresFromRows, parseListedScores, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels };
+  root.MatchMonitorOCR = { parse, parseSelectedRegions, parseScoreGridCells, preferScoreOdds, preprocessScoreOddsPixels, inferScoreGrid, scoreGridRows, scoreSelectedCrop, marketAt, validatePick, normalize, listedScoresFromRows, parseListedScores, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels, paddleWordsFromResult };
 })(globalThis);

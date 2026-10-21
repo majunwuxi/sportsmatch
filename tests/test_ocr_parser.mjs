@@ -446,3 +446,26 @@ test('root page and Sites Worker serve the same OCR assets without sending the i
   const payloadCode = uiSource.slice(uiSource.indexOf('function buildOcrPayload'), uiSource.indexOf('function clearOcr'));
   assert.doesNotMatch(payloadCode, /screenshotFile|screenshotUrl|data:image/);
 });
+
+test('adapts PaddleOCR polygon results into parser word boxes with confidence', () => {
+  const words = parser.paddleWordsFromResult({ items: [
+    { text: '12.5', score: 0.987, poly: [[10, 20], [48, 18], [50, 38], [12, 40]] },
+    { text: '', score: 0.9, poly: [[1, 1], [2, 1], [2, 2]] },
+    { text: 'bad-box', score: 0.8, poly: [] },
+  ] });
+  assert.equal(words.length, 1);
+  assert.equal(words[0].text, '12.5');
+  assert.equal(words[0].confidence, 99);
+  assert.deepEqual(JSON.parse(JSON.stringify(words[0].bbox)), { x0: 10, y0: 18, x1: 50, y1: 40 });
+});
+
+test('uses pinned PaddleOCR.js PP-OCRv5 in the browser with Tesseract fallback', () => {
+  assert.match(html, /<script type="importmap">/);
+  assert.match(uiSource, /@paddleocr\/paddleocr-js@0\.4\.2\/dist\/index\.mjs/);
+  assert.match(uiSource, /ocrVersion: "PP-OCRv5"/);
+  assert.match(uiSource, /backend: "wasm"/);
+  assert.match(uiSource, /PaddleOCR\.create/);
+  assert.match(uiSource, /createTesseractWorker/);
+  assert.match(uiSource, /recognizeBatch/);
+  assert.match(uiSource, /图片仅在本机浏览器识别/);
+});
