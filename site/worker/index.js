@@ -11,7 +11,32 @@ export default {async fetch(request,env){
  if(url.pathname==='/ocr-ui.js')return new Response(OCR_UI,{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
  if(url.pathname==='/teams-map.js')return new Response(TEAM_MAP_JS,{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
  // TEAM_LOGO_PROXY_ROUTE_BEGIN
- if(url.pathname.startsWith('/team-logo/')){const match=url.pathname.match(/^\/team-logo\/(\d+)\.png$/);if(!match)return json({detail:'球队队徽不存在'},404);if(request.method!=='GET')return json({detail:'Method not allowed'},405);const id=match[1],entry=TEAM_DIRECTORY[id],logoUrl='https://media.api-sports.io/football/teams/'+id+'.png';if(!entry||entry.logo!==logoUrl)return json({detail:'球队队徽不存在'},404);let timer;try{const controller=new AbortController();timer=setTimeout(()=>controller.abort(),8000);const upstream=await fetch(logoUrl,{method:'GET',redirect:'error',signal:controller.signal});if(!upstream.ok||upstream.headers.get('content-type')?.split(';')[0].trim().toLowerCase()!=='image/png')return json({detail:'暂时无法加载球队队徽'},502);const size=Number(upstream.headers.get('content-length')||0);if(size>2097152)return json({detail:'球队队徽图片超过大小限制'},502);const image=await upstream.arrayBuffer();if(image.byteLength>2097152)return json({detail:'球队队徽图片超过大小限制'},502);return new Response(image,{headers:{'content-type':'image/png','cache-control':'public, max-age=86400','x-content-type-options':'nosniff'}})}catch{return json({detail:'暂时无法加载球队队徽'},502)}finally{clearTimeout(timer)}}
+ if(url.pathname.startsWith('/team-logo/')){
+   const match=url.pathname.match(/^\/team-logo\/(\d+)\.png$/);
+   if(!match)return json({detail:'球队队徽不存在'},404);
+   if(request.method!=='GET')return json({detail:'Method not allowed'},405);
+   const id=match[1],entry=TEAM_DIRECTORY[id];
+   if(!entry||entry.logo!=='https://media.api-sports.io/football/teams/'+id+'.png')return json({detail:'球队队徽不存在'},404);
+   if(!env.BACKEND_URL||!env.BACKEND_USER||!env.BACKEND_PASSWORD)return json({detail:'独立监测后台尚未配置'},503);
+   let backend;
+   try{backend=new URL(env.BACKEND_URL);if(backend.protocol!=='https:'||backend.username||backend.password)throw Error('invalid backend url');backend.pathname='/team-logo/'+id+'.png';backend.search='';backend.hash=''}catch{return json({detail:'后台必须使用HTTPS地址'},503)}
+   let timer;
+   try{
+     const controller=new AbortController();
+     timer=setTimeout(()=>controller.abort(),8000);
+     const authorization='Basic '+btoa(Array.from(new TextEncoder().encode(env.BACKEND_USER+':'+env.BACKEND_PASSWORD),b=>String.fromCharCode(b)).join(''));
+     const upstream=await fetch(backend.toString(),{method:'GET',headers:{authorization},redirect:'manual',signal:controller.signal});
+     if(upstream.status>=300&&upstream.status<400)return json({detail:'后台返回重定向，已拒绝转发凭证'},502);
+     if(!upstream.ok)return json({detail:'后台无法提供球队队徽'},502);
+     if(upstream.headers.get('content-type')?.split(';')[0].trim().toLowerCase()!=='image/png')return json({detail:'后台返回了非PNG队徽'},502);
+     const size=Number(upstream.headers.get('content-length')||0);
+     if(size>2097152)return json({detail:'球队队徽图片超过大小限制'},502);
+     const image=new Uint8Array(await upstream.arrayBuffer());
+     if(image.byteLength>2097152)return json({detail:'球队队徽图片超过大小限制'},502);
+     if(image.byteLength<8||image[0]!==137||image[1]!==80||image[2]!==78||image[3]!==71||image[4]!==13||image[5]!==10||image[6]!==26||image[7]!==10)return json({detail:'后台返回的队徽不是有效PNG'},502);
+     return new Response(image,{headers:{'content-type':'image/png','cache-control':'public, max-age=86400','x-content-type-options':'nosniff'}})
+   }catch{return json({detail:'暂时无法连接独立监测后台'},502)}finally{clearTimeout(timer)}
+ }
  // TEAM_LOGO_PROXY_ROUTE_END
 if(url.pathname==='/')return new Response(HTML,{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net blob:; worker-src 'self' https://cdn.jsdelivr.net blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' https://cdn.jsdelivr.net https://tessdata.projectnaptha.com https://paddle-model-ecology.bj.bcebos.com; img-src 'self' blob: data:; base-uri 'none'; frame-ancestors 'self' https://chatgpt.com"}});
  if(!url.pathname.startsWith('/api/'))return json({detail:'Not found'},404);

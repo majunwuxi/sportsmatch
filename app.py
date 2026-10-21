@@ -548,6 +548,8 @@ def fetch_team_logo(logo_url):
             image=upstream.read(2*1024*1024+1)
             if len(image)>2*1024*1024:
                 raise HTTPException(status_code=502,detail="球队队徽图片超过大小限制")
+            if len(image)<8 or image[:8]!=b"\x89PNG\r\n\x1a\n":
+                raise HTTPException(status_code=502,detail="球队队徽服务返回了无效PNG图片")
             return image
     except HTTPException:
         raise

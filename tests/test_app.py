@@ -381,10 +381,11 @@ def test_team_map_asset_is_authenticated_and_contains_team_badges(client):
 
 def test_team_logo_proxy_only_fetches_allowlisted_team_images(client,monkeypatch):
     calls=[]
-    monkeypatch.setattr(m,'fetch_team_logo',lambda url:(calls.append(url) or b'png-test-bytes'))
+    image=b'\x89PNG\r\n\x1a\nvalid-png'
+    monkeypatch.setattr(m,'fetch_team_logo',lambda url:(calls.append(url) or image))
     response=client.get('/team-logo/569.png',auth=('test','test-password'))
     assert response.status_code==200
-    assert response.content==b'png-test-bytes'
+    assert response.content==image
     assert response.headers['content-type']=='image/png'
     assert response.headers['cache-control']=='no-store'
     assert response.headers['x-content-type-options']=='nosniff'
