@@ -4,7 +4,8 @@
   const listedWins = ["1:0", "2:0", "2:1", "3:0", "3:1", "3:2", "4:0", "4:1", "4:2", "5:0", "5:1", "5:2"];
   const listedDraws = ["0:0", "1:1", "2:2", "3:3"];
   const listedLosses = listedWins.map((score) => score.split(":").reverse().join(":"));
-  const scoreOptions = new Set([...listedWins, ...listedDraws, ...listedLosses, "胜其他", "平其他", "负其他"]);
+  const scoreOptions = new Set([...listedWins, ...listedDraws, ...listedLosses,
+    "胜其他", "平其他", "负其他", "胜其它", "平其它", "负其它"]);
   const resultOptions = new Set(["胜", "平", "负"]);
   const halfFullOptions = new Set(["胜胜", "胜平", "胜负", "平胜", "平平", "平负", "负胜", "负平", "负负"]);
   const totalGoalOptions = new Set(["0", "1", "2", "3", "4", "5", "6", "7+"]);
@@ -90,9 +91,15 @@
             current = mergeWord([current, words[i + 1], words[i + 2]], current._text + ":" + words[i + 2]._text);
             i += 2;
           }
-        } else if (/^[胜平负]$/.test(current._text) && words[i + 1]?._text === "其他" && words[i + 1]._box.left - current._box.right <= gapLimit * 5) {
-          current = mergeWord([current, words[i + 1]], current._text + "其他");
+        } else if (/^[胜平负]$/.test(current._text) && ["其他", "其它"].includes(words[i + 1]?._text) && words[i + 1]._box.left - current._box.right <= gapLimit * 5) {
+          current = mergeWord([current, words[i + 1]], current._text + words[i + 1]._text);
           i += 1;
+        } else if (/^[胜平负]$/.test(current._text) && words[i + 1]?._text === "其"
+          && ["他", "它"].includes(words[i + 2]?._text)
+          && words[i + 1]._box.left - current._box.right <= gapLimit * 5
+          && words[i + 2]._box.left - words[i + 1]._box.right <= gapLimit * 5) {
+          current = mergeWord([current, words[i + 1], words[i + 2]], current._text + "其" + words[i + 2]._text);
+          i += 2;
         } else if (/^7$/.test(current._text) && words[i + 1]?._text === "+" && words[i + 1]._box.left - current._box.right <= gapLimit * 3) {
           current = mergeWord([current, words[i + 1]], "7+");
           i += 1;

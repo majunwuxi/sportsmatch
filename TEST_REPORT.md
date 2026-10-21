@@ -79,3 +79,12 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Browser OCR was not re-run against the original full-resolution betting screenshot because only the application screenshot with a small embedded preview was available. Test the same image again after the private Site update and inspect the four selected labels/SP values before use.
 - Owner-private Site version 14 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site. The four-row output still needs confirmation using the original full-resolution screenshot.
 - No backend, API-Football, Telegram, secrets, or amstd services were changed. `napoli-monitor.service` was not accessed.
+
+## 2026-10-21 — `负其它` OCR spelling
+
+- Added `它` to both OCR character whitelists. The prior whitelist contained `其他` but not `它`, so a screenshot label written as `负其它` could lose its ending and be returned as only `负`.
+- OCR now joins character-split `负 / 其 / 它` and recognizes both `负其它` and `负其他`. The backend accepts both spellings and settles them against the same losing-team “other score” result while preserving the ticket's entered spelling in the detail row.
+- Verification: Python/FastAPI `26 passed`; OCR and Sites Worker tests `24 passed` (12 Site Worker tests); Sites Worker build, ESM artifact validation, Python/JavaScript syntax checks, and `git diff --check` passed.
+- The repository backend now accepts this alias, but the running `/opt/sportsmatch` service does not receive repository changes until it is updated and only `sportsmatch-web.service` is restarted. No existing service was remotely changed.
+- Owner-private ChatGPT Site version 15 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site. Site access remains owner-only.
+- No screenshot or ticket data was committed. Existing backend credentials, API-Football, Telegram, and amstd services were not touched; `napoli-monitor.service` was not accessed.

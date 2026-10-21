@@ -328,7 +328,7 @@
     if (!regions.length) return [];
     const cropResults = [];
     const psm = globalThis.Tesseract?.PSM || {};
-    const selectionWhitelist = "0123456789:.+OQZz胜平负其他主客";
+    const selectionWhitelist = "0123456789:.+OQZz胜平负其他其它主客";
     const oddsWhitelist = "0123456789.OQ";
     try {
       for (let index = 0; index < regions.length; index++) {
@@ -364,7 +364,7 @@
           crops.push(crop);
         }
 
-        const labelWhitelist = "0123456789:.+OQZz胜平负其他主客";
+        const labelWhitelist = "0123456789:.+OQZz胜平负其他其它主客";
         // Keep option and SP recognition bands close to their visual rows.
         // The previous broad overlap let small odds such as 18 leak into the
         // option pass and made partial labels look competitive with real ones.

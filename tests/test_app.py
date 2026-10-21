@@ -29,6 +29,13 @@ def test_outcome(score,selection):
     r=m.outcome(*score,[{'selection':selection,'stake':2,'odds':1.23}]);assert r['selection']==selection and r['payout']==2.46 and r['net']==.46 and r['total']==2.0
     assert r['tickets'][0]['won'] is True and r['tickets'][0]['share_pct']==100
 
+def test_other_character_spelling_is_valid_and_settles_like_other_score():
+    tickets=m.validate_tickets([m.Ticket(market='correct_score',selection='负其它',stake=2,odds=2.5)])
+    result=m.outcome(0,6,tickets)
+    assert result['tickets'][0]['selection']=='负其它'
+    assert result['tickets'][0]['won'] is True
+    assert result['payout']==5
+
 def test_all_jczq_markets_settle_against_regular_time_and_halftime():
     tickets=[
         {'market':'correct_score','selection':'2:1','stake':2,'odds':6},
@@ -104,6 +111,7 @@ def test_ticket_validation(client,monkeypatch):
                    {'market':'total_goals','selection':'8','stake':2,'odds':2}]:
         assert client.put('/api/tasks/1/tickets',auth=('test','test-password'),json=[ticket]).status_code==422
     for ticket in [{'market':'match_result','selection':'胜','stake':2,'odds':2},
+                   {'market':'correct_score','selection':'负其它','stake':2,'odds':2},
                    {'market':'handicap','selection':'平','handicap':-1,'stake':4,'odds':3},
                    {'market':'total_goals','selection':'7+','stake':2,'odds':1.9},
                    {'market':'half_full','selection':'负胜','stake':2,'odds':8}]:

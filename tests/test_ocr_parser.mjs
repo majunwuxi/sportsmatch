@@ -45,6 +45,21 @@ test('classifies all supported markets and infers handicap rows', () => {
   ]));
 });
 
+test('recognizes split 负其它 text as a valid correct-score selection', () => {
+  const words = [
+    word('比分', 150, 20),
+    word('负', 90, 100, 94, 14),
+    word('其', 104, 100, 94, 14),
+    word('它', 118, 100, 94, 14),
+    word('6.5', 90, 122, 94, 28),
+  ];
+  const row = parser.parse(words, 320, 300)[0];
+  assert.equal(row.selection, '负其它');
+  assert.equal(row.market, 'correct_score');
+  assert.equal(row.odds, 6.5);
+  assert.equal(parser.validatePick({ market: row.market, selection: row.selection, odds: row.odds }).ok, true);
+});
+
 test('normalizes full-width screenshot text and rejects invalid SP/selection combinations', () => {
   assert.equal(parser.normalize('２：０'), '2:0');
   assert.equal(JSON.stringify(parser.validatePick({ market: 'correct_score', selection: '2:0', odds: '9.5' })), JSON.stringify({ ok: true, reason: '有效' }));
@@ -260,6 +275,8 @@ test('root page and Sites Worker serve the same OCR assets without sending the i
   assert.match(uiSource, /contentHeight \* 0\.58/);
   assert.match(uiSource, /contentHeight \* 0\.54/);
   assert.match(uiSource, /SINGLE_LINE/);
+  assert.match(uiSource, /selectionWhitelist = "[^"]*它[^"]*"/);
+  assert.match(uiSource, /labelWhitelist = "[^"]*它[^"]*"/);
   assert.match(uiSource, /parseSelectedRegions/);
   assert.match(uiSource, /按选区建立/);
   assert.doesNotMatch(uiSource, /匹配到/);

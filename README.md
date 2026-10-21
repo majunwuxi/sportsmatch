@@ -11,7 +11,7 @@ The dashboard is published as an owner-private ChatGPT Site. Its always-on sched
 - Search fixtures by date and team name using API-Football
 - Create monitoring tasks with start time (Asia/Shanghai) and interval; multiple matches supported
 - Show upcoming tasks first in kickoff-time order; hide finished matches 24 hours after the backend first confirms their terminal result
-- Import/export ticket JSON; support `胜平负`, `让球胜平负`, 31 correct-score selections including `胜其他`, `平其他`, `负其他`, `总进球`, and `半全场`
+- Import/export ticket JSON; support `胜平负`, `让球胜平负`, 31 correct-score selections including `胜其他`, `平其他`, `负其他` and the equivalent `其它` spellings, `总进球`, and `半全场`
 - Simulate manually by market, or upload a NetEase Betting Assistant screenshot for browser-local OCR across markets; review each selection and SP, then balance a shared ¥2-unit budget
 - Show live scores separately from the 90-minute settlement score so extra time and penalties do not change JCZQ results
 - Check scores on a persistent SQLite-backed schedule; Telegram alerts at first check, score changes, and full time

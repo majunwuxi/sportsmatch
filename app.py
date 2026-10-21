@@ -25,7 +25,8 @@ TERMINAL={"FT","AET","PEN","CANC","ABD","AWD","WO"}
 VOID={"CANC","ABD","AWD","WO"}
 LISTED_DRAWS={"0:0","1:1","2:2","3:3"}
 LISTED_LOSSES={":".join(reversed(x.split(":"))) for x in LISTED_WINS}
-SCORES=LISTED_WINS | LISTED_DRAWS | LISTED_LOSSES | {"胜其他","平其他","负其他"}
+SCORES=LISTED_WINS | LISTED_DRAWS | LISTED_LOSSES | {"胜其他","平其他","负其他","胜其它","平其它","负其它"}
+OTHER_SCORE_ALIASES={"胜其它":"胜其他","平其它":"平其他","负其它":"负其他"}
 MARKETS={"correct_score":"比分","match_result":"胜平负","handicap":"让球胜平负","total_goals":"总进球","half_full":"半全场"}
 RESULTS={"胜","平","负"}
 HALF_FULL={a+b for a in RESULTS for b in RESULTS}
@@ -120,7 +121,7 @@ def ticket_matches(ticket,home,away,half_home=None,half_away=None):
     if home is None or away is None: return None
     market=ticket.get("market","correct_score")
     selection=ticket["selection"]
-    if market=="correct_score": return selection==score_category(home,away)
+    if market=="correct_score": return OTHER_SCORE_ALIASES.get(selection,selection)==score_category(home,away)
     if market=="match_result": return selection==score_result(home,away)
     if market=="handicap": return selection==score_result(home+int(ticket["handicap"]),away)
     if market=="total_goals": return selection==("7+" if home+away>=7 else str(home+away))
