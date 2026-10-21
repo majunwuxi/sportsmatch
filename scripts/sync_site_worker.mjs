@@ -19,6 +19,8 @@ let rest = source.slice(jsonStart);
 const routeMarker = ' const url=new URL(request.url);\n';
 if (!rest.includes(routeMarker)) throw new Error('Worker request router marker is missing.');
 const routes = " const url=new URL(request.url);\n if(url.pathname==='/ocr-parser.js')return new Response(OCR_PARSER,{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});\n if(url.pathname==='/ocr-ui.js')return new Response(OCR_UI,{headers:{'content-type':'application/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});\n";
+// Re-running this sync must replace, not accumulate, the two OCR asset routes.
+rest = rest.replace(/ if\(url\.pathname==='\/ocr-(?:parser|ui)\.js'\)return new Response\(OCR_(?:PARSER|UI),\{headers:\{'content-type':'application\/javascript; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'\}\}\);\n/g, '');
 rest = rest.replace(routeMarker, routes);
 const output = `${prefix}const HTML=${JSON.stringify(html)};\nconst OCR_PARSER=${JSON.stringify(parser)};\nconst OCR_UI=${JSON.stringify(ui)};\n${rest}`;
 await writeFile(workerPath, output);

@@ -6,6 +6,15 @@
   const listedLosses = listedWins.map((score) => score.split(":").reverse().join(":"));
   const listedScoreOptions = new Set([...listedWins, ...listedDraws, ...listedLosses]);
   const listedScoreOrder = [...listedWins, ...listedDraws, ...listedLosses];
+  const scoreGridRows = [
+    ["1:0", "2:0", "2:1", "3:0", "3:1", "3:2", "4:0"],
+    ["4:1", "4:2", "5:0", "5:1", "5:2"],
+    ["0:0", "1:1", "2:2", "3:3"],
+    ["0:1", "0:2", "1:2", "0:3", "1:3", "2:3", "0:4"],
+    ["1:4", "2:4", "0:5", "1:5", "2:5"],
+  ];
+  const scoreGridPosition = new Map(scoreGridRows.flatMap((row, rowIndex) =>
+    row.map((score, columnIndex) => [score, { row: rowIndex, column: columnIndex }])));
   const scoreOptions = new Set([...listedScoreOptions,
     "胜其他", "平其他", "负其他", "胜其它", "平其它", "负其它"]);
   const resultOptions = new Set(["胜", "平", "负"]);
@@ -141,6 +150,7 @@
     // before validating the actual number.
     const text = normalize(word.text)
       .replace(/[↑↓↗↘↖↙⬆⬇⬈⬉⬊⬋⇧⇩↥↧▲▼△▽]/g, "")
+      .replace(/^\.+(?=\d)/, "")
       .replace(/[Oo]/g, "0");
     if (!/^\d{1,5}(?:\.\d{1,4})?$/.test(text)) return null;
     const value = Number(text);
@@ -258,6 +268,147 @@
         ? [score] : [];
     }));
     return listedScoreOrder.filter((score) => found.has(score));
+  }
+
+  function median(values) {
+    const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+    if (!sorted.length) return null;
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  }
+
+  // The standard correct-score table uses the same 7-column, 5-row layout.
+  // Use labels already recognized anywhere on the page to recover cell centers,
+  // then OCR each predicted cell independently for its small SP text.
+  function inferScoreGrid(rows, width, height) {
+    const byScore = new Map();
+    for (const row of rows || []) {
+      const selection = normalize(row?.selection);
+      const position = row?.position || {};
+      const layout = scoreGridPosition.get(selection);
+      const x = Number(position.x), y = Number(position.y);
+      if (row?.market !== "correct_score" || !layout || !Number.isFinite(x) || !Number.isFinite(y)) continue;
+      const previous = byScore.get(selection);
+      if (!previous || Number(row.confidence ?? 0) > Number(previous.confidence ?? 0)) byScore.set(selection, row);
+    }
+    const labels = [...byScore].map(([selection, candidate]) => ({
+      selection,
+      x: Number(candidate.position.x),
+      y: Number(candidate.position.y),
+      ...scoreGridPosition.get(selection),
+      confidence: Number(candidate.confidence ?? 0),
+    }));
+    if (labels.length < 8) return null;
+
+    const horizontalSteps = [];
+    const verticalSteps = [];
+    for (let i = 0; i < labels.length; i++) for (let j = i + 1; j < labels.length; j++) {
+      const a = labels[i], b = labels[j];
+      if (a.row === b.row && a.column !== b.column) {
+        const step = (b.x - a.x) / (b.column - a.column);
+        if (step > 0) horizontalSteps.push(step);
+      }
+      if (a.row !== b.row) {
+        const step = (b.y - a.y) / (b.row - a.row);
+        if (step > 0) verticalSteps.push(step);
+      }
+    }
+    const cellWidth = median(horizontalSteps);
+    const rowHeight = median(verticalSteps);
+    if (!cellWidth || !rowHeight || cellWidth < width * 0.025 || cellWidth > width * 0.35
+      || rowHeight < height * 0.012 || rowHeight > height * 0.25) return null;
+
+    const originX = median(labels.map((label) => label.x - label.column * cellWidth));
+    const originY = median(labels.map((label) => label.y - label.row * rowHeight));
+    const inliers = labels.filter((label) =>
+      Math.abs(label.x - (originX + label.column * cellWidth)) <= cellWidth * 0.3
+      && Math.abs(label.y - (originY + label.row * rowHeight)) <= rowHeight * 0.3);
+    if (inliers.length < Math.max(8, Math.ceil(labels.length * 0.45))
+      || new Set(inliers.map((label) => label.row)).size < 3
+      || new Set(inliers.map((label) => label.column)).size < 4) return null;
+
+    const cells = listedScoreOrder.map((selection) => {
+      const layout = scoreGridPosition.get(selection);
+      const center = { x: originX + layout.column * cellWidth, y: originY + layout.row * rowHeight };
+      return {
+        selection,
+        ...layout,
+        center,
+        region: {
+          x0: Math.max(0, Math.floor(center.x - cellWidth * 0.48)),
+          y0: Math.max(0, Math.floor(center.y - rowHeight * 0.56)),
+          x1: Math.min(width, Math.ceil(center.x + cellWidth * 0.48)),
+          y1: Math.min(height, Math.ceil(center.y + rowHeight * 0.56)),
+        },
+      };
+    });
+    return { cells, cellWidth, rowHeight, origin: { x: originX, y: originY }, recognizedLabels: labels.length, inlierLabels: inliers.length };
+  }
+
+  function parseScoreGridCells(cells) {
+    return (cells || []).map((cell) => {
+      const cropWidth = Math.max(1, Number(cell.cropWidth) || Number(cell.region?.x1) - Number(cell.region?.x0) || 1);
+      const cropHeight = Math.max(1, Number(cell.cropHeight) || Number(cell.region?.y1) - Number(cell.region?.y0) || 1);
+      const validWords = (cell.words || []).filter((word) => normalize(word.text)
+        && Number(word.confidence ?? 100) >= 20 && getBox(word).right > getBox(word).left);
+      const tokens = mergeFragments(groupLines(validWords, cropHeight), cropWidth);
+      const odds = tokens.map((word) => ({ word, odds: numericOdds(word), box: getBox(word) }))
+        .filter((entry) => entry.odds !== null)
+        .sort((a, b) => b.box.cy - a.box.cy || Number(b.word.confidence ?? 0) - Number(a.word.confidence ?? 0))[0] || null;
+      const confidence = Math.round(Number(odds?.word.confidence ?? 0));
+      return {
+        market: "correct_score",
+        selection: cell.selection,
+        handicap: null,
+        odds: odds?.odds ?? null,
+        confidence,
+        highlighted: Boolean(cell.highlighted),
+        needsReview: !odds || confidence < 70,
+        position: cell.center || { x: 0, y: 0 },
+      };
+    });
+  }
+
+  function preferScoreOdds(pageRow, gridRow, confidenceMargin = 8) {
+    if (!gridRow || gridRow.odds === null || gridRow.odds === undefined) return pageRow;
+    if (!pageRow || pageRow.odds === null || pageRow.odds === undefined) {
+      return { ...pageRow, ...gridRow, highlighted: Boolean(pageRow?.highlighted || gridRow.highlighted) };
+    }
+    const pageValue = String(pageRow.odds), gridValue = String(gridRow.odds);
+    const sameDigits = pageValue.replace(".", "") === gridValue.replace(".", "");
+    const decimalDifference = sameDigits && pageValue.includes(".") !== gridValue.includes(".");
+    const chooseGrid = decimalDifference
+      ? gridValue.includes(".")
+      : Number(gridRow.confidence || 0) >= Number(pageRow.confidence || 0) - confidenceMargin;
+    const oddsRow = chooseGrid ? gridRow : pageRow;
+    return {
+      ...pageRow,
+      ...oddsRow,
+      highlighted: Boolean(pageRow.highlighted || gridRow.highlighted),
+      needsReview: Boolean(pageRow.needsReview || gridRow.needsReview),
+    };
+  }
+
+  function preprocessScoreOddsPixels(data, selected = false, threshold = 190, chromaThreshold = 24) {
+    if (!data || typeof data.length !== "number") return data;
+    const cutoff = Math.max(0, Math.min(255, Number(threshold) || 190));
+    const chromaCutoff = Math.max(0, Math.min(255, Number(chromaThreshold) || 24));
+    for (let offset = 0; offset + 3 < data.length; offset += 4) {
+      const red = Number(data[offset]), green = Number(data[offset + 1]), blue = Number(data[offset + 2]);
+      const luminance = (red * 3 + green * 5 + blue * 2) / 10;
+      const chroma = Math.max(red, green, blue) - Math.min(red, green, blue);
+      // Highlighted cells contain white text on a colored dark fill. Invert
+      // those pixels to black-on-white. For ordinary cells, remove saturated
+      // SP-change icons before binarizing the numeric text so an arrow cannot
+      // become a trailing digit (e.g. 21↓ -> 214).
+      const value = selected
+        ? (luminance >= cutoff ? 0 : 255)
+        : (chroma >= chromaCutoff ? 255 : (luminance >= cutoff ? 255 : 0));
+      data[offset] = value;
+      data[offset + 1] = value;
+      data[offset + 2] = value;
+    }
+    return data;
   }
 
   function parseListedScores(value) {
@@ -573,5 +724,5 @@
     return data;
   }
 
-  root.MatchMonitorOCR = { parse, parseSelectedRegions, scoreSelectedCrop, marketAt, validatePick, normalize, listedScoresFromRows, parseListedScores, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels };
+  root.MatchMonitorOCR = { parse, parseSelectedRegions, parseScoreGridCells, preferScoreOdds, preprocessScoreOddsPixels, inferScoreGrid, scoreGridRows, scoreSelectedCrop, marketAt, validatePick, normalize, listedScoresFromRows, parseListedScores, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels };
 })(globalThis);

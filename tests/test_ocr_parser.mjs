@@ -116,6 +116,115 @@ test('includes exact-score SPs when OCR attaches upward or downward change arrow
   assert.match(uiSource, /oddsWhitelist = "[^"]*↑↓/);
 });
 
+test('reconstructs the 28-cell correct-score grid from a sparse set of page labels', () => {
+  const seen = ['1:0', '2:0', '3:1', '0:0', '1:1', '3:3', '0:1', '0:2', '1:2', '0:3', '1:3', '2:3', '0:4', '1:4', '2:4', '0:5', '2:5'];
+  const positions = new Map([
+    ...['1:0', '2:0', '2:1', '3:0', '3:1', '3:2', '4:0'].map((score, column) => [score, { row: 0, column }]),
+    ...['4:1', '4:2', '5:0', '5:1', '5:2'].map((score, index) => [score, { row: 1, column: index }]),
+    ...['0:0', '1:1', '2:2', '3:3'].map((score, column) => [score, { row: 2, column }]),
+    ...['0:1', '0:2', '1:2', '0:3', '1:3', '2:3', '0:4'].map((score, column) => [score, { row: 3, column }]),
+    ...['1:4', '2:4', '0:5', '1:5', '2:5'].map((score, index) => [score, { row: 4, column: index }]),
+  ]);
+  const pageRows = seen.map((selection) => ({
+    market: 'correct_score', selection, confidence: 90,
+    position: { x: 70 + positions.get(selection).column * 110, y: 100 + positions.get(selection).row * 50 },
+  }));
+  const grid = parser.inferScoreGrid(pageRows, 900, 420);
+  assert.ok(grid);
+  assert.equal(grid.recognizedLabels, seen.length);
+  assert.equal(grid.cells.length, 28);
+  assert.deepEqual(JSON.stringify(grid.cells.map((cell) => cell.selection)), JSON.stringify([
+    '1:0', '2:0', '2:1', '3:0', '3:1', '3:2', '4:0', '4:1', '4:2', '5:0', '5:1', '5:2',
+    '0:0', '1:1', '2:2', '3:3',
+    '0:1', '0:2', '1:2', '0:3', '1:3', '2:3', '0:4', '1:4', '2:4', '0:5', '1:5', '2:5',
+  ]));
+  assert.ok(Math.abs(grid.cells.find((cell) => cell.selection === '5:1').center.x - (70 + 3 * 110)) < 1);
+  assert.ok(Math.abs(grid.cells.find((cell) => cell.selection === '5:1').center.y - (100 + 50)) < 1);
+});
+
+test('extracts every grid-cell SP from a dedicated odds-band OCR pass', () => {
+  const selections = [
+    '1:0', '2:0', '2:1', '3:0', '3:1', '3:2', '4:0', '4:1', '4:2', '5:0', '5:1', '5:2',
+    '0:0', '1:1', '2:2', '3:3',
+    '0:1', '0:2', '1:2', '0:3', '1:3', '2:3', '0:4', '1:4', '2:4', '0:5', '1:5', '2:5',
+  ];
+  const cells = selections.map((selection, index) => {
+    if (selection === '1:1') return {
+      selection, cropWidth: 100, cropHeight: 50,
+      words: [word('6', 30, 30, 94, 10), word('.', 41, 30, 90, 4), word('5', 46, 30, 94, 10)],
+    };
+    const odds = index === 4 ? '13.5↓' : String(9 + index) + (index % 2 ? '↑' : '↓');
+    return { selection, cropWidth: 100, cropHeight: 50, words: [word(odds, 30, 30, 94, 35)] };
+  });
+  const rows = parser.parseScoreGridCells(cells);
+  assert.equal(rows.length, 28);
+  assert.deepEqual(JSON.stringify(parser.listedScoresFromRows(rows)), JSON.stringify(selections));
+  assert.equal(rows.find((row) => row.selection === '3:1').odds, 13.5);
+  assert.equal(rows.find((row) => row.selection === '1:1').odds, 6.5);
+});
+
+test('keeps all 28 table options available when an individual SP cannot be read', () => {
+  const cells = parser.scoreGridRows.flat().map((selection) => ({
+    selection,
+    cropWidth: 100,
+    cropHeight: 50,
+    words: selection === '1:4' ? [] : [word('50', 30, 30, 94, 20)],
+  }));
+  const rows = parser.parseScoreGridCells(cells);
+  assert.equal(rows.length, 28);
+  assert.equal(rows.find((row) => row.selection === '1:4').odds, null);
+  assert.equal(rows.find((row) => row.selection === '1:4').needsReview, true);
+  assert.equal(parser.listedScoresFromRows(rows).length, 27);
+  assert.match(uiSource, /const recoveredScores = scoreGridRows\.filter\(\(row\) => !presentScores\.has/);
+  assert.match(uiSource, /缺失SP的标准比分仍列入候选项/);
+});
+
+test('merges whole-page and per-cell SP reads without losing decimals or lower-confidence values', () => {
+  const correctedDecimal = parser.preferScoreOdds(
+    { market: 'correct_score', selection: '3:1', odds: 135, confidence: 91, highlighted: true },
+    { market: 'correct_score', selection: '3:1', odds: 13.5, confidence: 72, highlighted: false },
+  );
+  assert.equal(correctedDecimal.odds, 13.5);
+  assert.equal(correctedDecimal.highlighted, true);
+
+  const correctedArrow = parser.preferScoreOdds(
+    { market: 'correct_score', selection: '3:0', odds: 214, confidence: 84 },
+    { market: 'correct_score', selection: '3:0', odds: 21, confidence: 80 },
+  );
+  assert.equal(correctedArrow.odds, 21);
+
+  const retainsStrongerPageRead = parser.preferScoreOdds(
+    { market: 'correct_score', selection: '3:2', odds: 18, confidence: 92 },
+    { market: 'correct_score', selection: '3:2', odds: 16, confidence: 60 },
+  );
+  assert.equal(retainsStrongerPageRead.odds, 18);
+  assert.match(uiSource, /preferScoreOdds\(row, gridRow\)/);
+});
+
+test('removes colored SP-change arrows and normalizes white-on-dark selected cells', () => {
+  const ordinary = new Uint8ClampedArray([
+    24, 24, 24, 255,       // black SP digits
+    235, 235, 235, 255,    // pale cell background
+    30, 165, 75, 255,      // green down arrow
+    205, 52, 62, 255,      // red up arrow
+  ]);
+  parser.preprocessScoreOddsPixels(ordinary, false, 190, 24);
+  assert.deepEqual([...ordinary], [0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]);
+
+  const selected = new Uint8ClampedArray([
+    82, 91, 133, 255,      // dark selected fill
+    248, 248, 248, 255,    // white SP digits
+    24, 165, 75, 255,      // colored arrow on selected fill
+  ]);
+  parser.preprocessScoreOddsPixels(selected, true, 190, 24);
+  assert.deepEqual([...selected], [255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255]);
+  const noisyDecimal = parser.parseScoreGridCells([{
+    selection: '2:0', cropWidth: 200, cropHeight: 60,
+    words: [word('.12.5', 70, 30, 88, 40)],
+  }]);
+  assert.equal(noisyDecimal[0].odds, 12.5);
+});
+
 test('detects dark selected cells, filters a full-width button, and inverts white text for OCR', () => {
   const width = 240, height = 160;
   const pixels = new Uint8ClampedArray(width * height * 4);
@@ -318,6 +427,9 @@ test('root page and Sites Worker serve the same OCR assets without sending the i
   assert.match(uiSource, /selectionWhitelist/);
   assert.match(uiSource, /scoreSelectedCrop/);
   assert.match(uiSource, /recognizeBand/);
+  assert.match(uiSource, /preprocessScoreOddsPixels/);
+  assert.match(uiSource, /recognizeScoreGridCells\(worker, canvases\.color, scoreGrid/);
+  assert.match(uiSource, /阈值复核/);
   assert.match(uiSource, /contentHeight \* 0\.58/);
   assert.match(uiSource, /contentHeight \* 0\.54/);
   assert.match(uiSource, /SINGLE_LINE/);

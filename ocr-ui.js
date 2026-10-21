@@ -6,6 +6,7 @@
   let parsedPicks = null;
   let showAllCandidates = false;
   let selectionRegionCount = 0;
+  const oddsWhitelist = "0123456789.OQ↑↓↗↘↖↙⬆⬇⬈⬉⬊⬋⇧⇩↥↧▲▼△▽";
 
   function setOcrStatus(message, error = false) {
     const node = $("ocrStatus");
@@ -340,7 +341,6 @@
     const cropResults = [];
     const psm = globalThis.Tesseract?.PSM || {};
     const selectionWhitelist = "0123456789:.+OQZz胜平负其他其它主客";
-    const oddsWhitelist = "0123456789.OQ↑↓↗↘↖↙⬆⬇⬈⬉⬊⬋⇧⇩↥↧▲▼△▽";
     try {
       for (let index = 0; index < regions.length; index++) {
         const region = regions[index];
@@ -425,6 +425,58 @@
     return cropResults;
   }
 
+  async function recognizeScoreGridCells(worker, sourceCanvas, grid, passName, selectionRegions = [], threshold = 190) {
+    if (!grid?.cells?.length) return [];
+    const psm = globalThis.Tesseract?.PSM || {};
+    const results = [];
+    for (let index = 0; index < grid.cells.length; index++) {
+      const cell = grid.cells[index];
+      const region = cell.region;
+      const sourceWidth = Math.max(1, region.x1 - region.x0);
+      const sourceHeight = Math.max(1, region.y1 - region.y0);
+      const upscale = Math.max(1, Math.min(3, 2200 / Math.max(sourceWidth, sourceHeight), Math.sqrt(1_800_000 / (sourceWidth * sourceHeight))));
+      const contentWidth = Math.max(sourceWidth, Math.floor(sourceWidth * upscale));
+      const contentHeight = Math.max(sourceHeight, Math.floor(sourceHeight * upscale));
+      const paddingX = Math.max(16, Math.round(Math.min(sourceWidth * 0.12, 24) * upscale));
+      const paddingY = Math.max(16, Math.round(Math.min(sourceHeight * 0.10, 18) * upscale));
+      const crop = document.createElement("canvas");
+      crop.width = contentWidth + paddingX * 2;
+      crop.height = contentHeight + paddingY * 2;
+      const context = crop.getContext("2d");
+      context.fillStyle = "#fff";
+      context.fillRect(0, 0, crop.width, crop.height);
+      context.imageSmoothingEnabled = true;
+      context.drawImage(sourceCanvas, region.x0, region.y0, sourceWidth, sourceHeight,
+        paddingX, paddingY, contentWidth, contentHeight);
+
+      const center = cell.center || { x: (region.x0 + region.x1) / 2, y: (region.y0 + region.y1) / 2 };
+      const selected = (selectionRegions || []).some((item) =>
+        center.x >= item.x0 && center.x <= item.x1 && center.y >= item.y0 && center.y <= item.y1);
+      const pixels = context.getImageData(0, 0, crop.width, crop.height);
+      MatchMonitorOCR.preprocessScoreOddsPixels(pixels.data, selected, threshold);
+      context.putImageData(pixels, 0, 0);
+
+      // The grid fit gives the score label center. The SP is the second line,
+      // below it; crop only that band so a missing decimal or nearby score
+      // digits cannot be mistaken for the odds.
+      const oddsStart = Math.min(crop.height - 1, paddingY + contentHeight * 0.66);
+      setOcrStatus("正在逐格识别比分 SP：" + (index + 1) + "/" + grid.cells.length + "（" + passName + "）…");
+      const words = await recognizeBand(worker, crop, oddsStart, crop.height, psm.SINGLE_LINE || "7", oddsWhitelist);
+      results.push({ ...cell, words, cropWidth: crop.width, cropHeight: crop.height });
+    }
+    return results;
+  }
+
+  function preferScoreGridRead(first, second) {
+    if (!first?.odds) return second || first;
+    if (!second?.odds) return first;
+    const a = String(first.odds), b = String(second.odds);
+    if (a.replace(".", "") === b.replace(".", "") && a.includes(".") !== b.includes(".")) {
+      return a.includes(".") ? first : second;
+    }
+    return Number(second.confidence || 0) > Number(first.confidence || 0) ? second : first;
+  }
+
   async function imageCanvases(file) {
     const bitmap = await createImageBitmap(file);
     const scale = Math.min(2, 2600 / Math.max(bitmap.width, bitmap.height));
@@ -473,6 +525,8 @@
     parsedPicks = null;
     showAllCandidates = false;
     selectionRegionCount = 0;
+    let scoreGrid = null;
+    let scoreGridRows = [];
     try {
       setOcrStatus("正在载入中文识别引擎（首次使用需联网下载并缓存）…");
       await loadTesseract();
@@ -499,11 +553,43 @@
         const enhancedWords = MatchMonitorOCR.mergeSelectedRegionWords(pageWords, cropResults);
         const pageCandidates = MatchMonitorOCR.parse(enhancedWords, canvases.width, canvases.height,
           (bbox) => MatchMonitorOCR.containsSelectedRegion(bbox, selectionRegions));
-        const selectedRows = MatchMonitorOCR.parseSelectedRegions(cropResults, pageWords, canvases.width, canvases.height);
-        const selectedFingerprints = new Set(selectedRows.filter((row) => row.selection)
-          .map((row) => [row.market, row.handicap, row.selection, row.odds].join("|")));
-        const otherCandidates = pageCandidates.filter((row) => !row.highlighted
-          && !selectedFingerprints.has([row.market, row.handicap, row.selection, row.odds].join("|")));
+        let selectedRows = MatchMonitorOCR.parseSelectedRegions(cropResults, pageWords, canvases.width, canvases.height);
+        scoreGrid = MatchMonitorOCR.inferScoreGrid(pageCandidates, canvases.width, canvases.height);
+        if (scoreGrid) {
+          const firstRead = MatchMonitorOCR.parseScoreGridCells(
+            await recognizeScoreGridCells(worker, canvases.color, scoreGrid, "去箭头" , selectionRegions, 190));
+          const sourceRows = [...pageCandidates, ...selectedRows];
+          const sourceOdds = new Map(sourceRows.filter((row) => row.market === "correct_score")
+            .map((row) => [row.selection, row.odds]));
+          const retryScores = new Set(firstRead.filter((row) => {
+            const known = sourceOdds.get(row.selection);
+            return row.odds === null || row.confidence < 75 || Number.isInteger(row.odds) && row.odds >= 100
+              || known !== undefined && known !== null && Number(known) !== Number(row.odds);
+          }).map((row) => row.selection));
+          if (retryScores.size) {
+            const retryGrid = { ...scoreGrid, cells: scoreGrid.cells.filter((cell) => retryScores.has(cell.selection)) };
+            const secondRead = MatchMonitorOCR.parseScoreGridCells(
+              await recognizeScoreGridCells(worker, canvases.color, retryGrid, "阈值复核", selectionRegions, 210));
+            const retryByScore = new Map(secondRead.map((row) => [row.selection, row]));
+            scoreGridRows = firstRead.map((row) => preferScoreGridRead(row, retryByScore.get(row.selection)));
+          } else scoreGridRows = firstRead;
+        }
+        const gridByScore = new Map(scoreGridRows.map((row) => [row.selection, row]));
+        const applyGridOdds = (row) => {
+          const gridRow = row.market === "correct_score" ? gridByScore.get(row.selection) : null;
+          return gridRow ? MatchMonitorOCR.preferScoreOdds(row, gridRow) : row;
+        };
+        selectedRows = selectedRows.map(applyGridOdds);
+        const pageCandidatesWithGrid = pageCandidates.map(applyGridOdds);
+        const presentScores = new Set(pageCandidatesWithGrid
+          .filter((row) => row.market === "correct_score").map((row) => row.selection));
+        const recoveredScores = scoreGridRows.filter((row) => !presentScores.has(row.selection))
+          .map((row) => ({ ...row, highlighted: MatchMonitorOCR.containsSelectedRegion(
+            scoreGrid.cells.find((cell) => cell.selection === row.selection)?.region, selectionRegions) }));
+        const selectedKeys = new Set(selectedRows.filter((row) => row.selection)
+          .map((row) => [row.market, row.handicap, row.selection].join("|")));
+        const otherCandidates = [...pageCandidatesWithGrid, ...recoveredScores].filter((row) => !row.highlighted
+          && !selectedKeys.has([row.market, row.handicap, row.selection].join("|")));
         parsedPicks = [...otherCandidates, ...selectedRows]
           .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x)
           .map((row) => ({ ...row, enabled: row.highlighted, stake: 0 }));
@@ -523,12 +609,16 @@
       const recognizedLabels = parsedPicks.filter((row) => row.highlighted && row.selection && !row.unrecognized).length;
       const recognizedOdds = parsedPicks.filter((row) => row.highlighted && row.odds !== null).length;
       const listedScoreCount = MatchMonitorOCR.listedScoresFromRows(parsedPicks).length;
+      const gridScoreCount = scoreGridRows.filter((row) => row.odds !== null).length;
+      const gridStatus = scoreGrid
+        ? "逐格识别 SP " + gridScoreCount + "/28；缺失SP的标准比分仍列入候选项，可展开补录"
+        : "未能自动定位比分表格";
       setOcrStatus(parsedPicks.length
         ? highlighted
-          ? "识别出 " + parsedPicks.length + " 个候选项，检测到 " + selectionRegionCount + " 块深色选区，并按选区建立 " + highlighted + " 条投注项（选项识别 " + recognizedLabels + "/" + selectionRegionCount + "，SP识别 " + recognizedOdds + "/" + selectionRegionCount + "）。识别到 " + listedScoreCount + " 个带SP的精确比分；请核对并补齐下方用于‘其他’结算的完整清单。"
+          ? "识别出 " + parsedPicks.length + " 个候选项，检测到 " + selectionRegionCount + " 块深色选区，并按选区建立 " + highlighted + " 条投注项（选项识别 " + recognizedLabels + "/" + selectionRegionCount + "，SP识别 " + recognizedOdds + "/" + selectionRegionCount + "）。" + gridStatus + "；精确比分清单当前有 " + listedScoreCount + "/28 项，请对照截图核对。"
           : selectionRegionCount
-            ? "检测到 " + selectionRegionCount + " 块深色选区，但未能建立选区记录。识别到 " + listedScoreCount + " 个带SP的精确比分；请核对清单。"
-            : "识别到 " + parsedPicks.length + " 个候选项，但没有检测到深色底选项，因此没有自动勾选。识别到 " + listedScoreCount + " 个带SP的精确比分；可展开候选项并核对清单。"
+            ? "检测到 " + selectionRegionCount + " 块深色选区，但未能建立选区记录。" + gridStatus + "；精确比分清单当前有 " + listedScoreCount + "/28 项，请核对清单。"
+            : "识别到 " + parsedPicks.length + " 个候选项，但没有检测到深色底选项，因此没有自动勾选。" + gridStatus + "；精确比分清单当前有 " + listedScoreCount + "/28 项，请核对清单。"
         : "没有识别到可用投注项。请换一张包含玩法标题、选项和SP的清晰截图，或手动填写模拟器。", !parsedPicks.length);
     } catch (error) {
       $("simulatorManual").hidden = false;
