@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel, Field
 import secrets
 import base64
@@ -341,3 +341,11 @@ def usage(_:str=Depends(auth)):
 @app.get("/",response_class=HTMLResponse)
 def index(_:str=Depends(auth)):
     return Path(__file__).with_name("index.html").read_text(encoding="utf-8")
+
+@app.get("/ocr-parser.js")
+def ocr_parser(_:str=Depends(auth)):
+    return FileResponse(Path(__file__).with_name("ocr-parser.js"),media_type="application/javascript",headers={"Cache-Control":"no-store"})
+
+@app.get("/ocr-ui.js")
+def ocr_ui(_:str=Depends(auth)):
+    return FileResponse(Path(__file__).with_name("ocr-ui.js"),media_type="application/javascript",headers={"Cache-Control":"no-store"})
