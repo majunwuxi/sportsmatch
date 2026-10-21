@@ -69,3 +69,9 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Verification: Python/FastAPI `25 passed`; Sites Worker `9 passed`; OCR parser `4 passed`; Worker/OCR JavaScript syntax checks passed. The Worker test checks the hidden initial state, removed link, and reveal/fallback hooks.
 - The owner-private ChatGPT Site was published successfully at version 7: https://wellmax-match-monitor.letnek-majun.chatgpt.site
 - Browser OCR was not exercised against a live screenshot in this pass. No screenshot, betting record, API key, Telegram token, or server credential was included in the source.
+
+## 2026-10-21 — Screenshot OCR loading and preview fix
+
+- Root cause: the private Site CSP blocked the Tesseract.js CDN, WASM compilation, worker creation, and `blob:` screenshot preview. The allowlist now permits only jsDelivr and the Tesseract language-data host required by the browser OCR flow, plus local blob previews/workers. No wildcard origins or client-side secrets were added.
+- Verification: Sites Worker tests `10 passed`; artifact build and ESM validation passed. The private Site was redeployed as version 8. A live user screenshot has not yet been reprocessed in the browser.
+- No API key, Telegram token, server credential, or screenshot was committed.
