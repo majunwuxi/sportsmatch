@@ -140,3 +140,12 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - The same run reported per-cell odds at 28/28 and a complete exact-score list at 28/28. The seven selected rows and their odds are visible in the result screen, and the user said the recognition appeared complete and better than the previous engine.
 - This is a successful live smoke test of the deployed browser OCR flow on one user-provided image. The result screen is not a retained original-image/ground-truth pair, so it does not establish a general accuracy rate. The uploaded image and private betting data were not committed.
 - No production server, API-Football key, Telegram token, or `napoli-monitor.service` was accessed or changed.
+
+## 2026-10-21 — Task-card and screenshot simulator layout
+
+- Each monitoring task now shows a wager-count/total summary and a per-task “展开投注” control. Bet tables start collapsed, expose `aria-expanded`/`aria-controls`, and retain their open state across the 30-second task refresh.
+- Finished-match tasks retain the four action buttons in a disabled gray state. Other task states keep their existing controls.
+- When OCR has identified a selected wager, the lower manual market table stays hidden. The OCR panel now places a total-budget input immediately below the allocation instruction and to the left of “均衡分配识别项”; no-selection and error flows still expose manual mode.
+- Verification: combined OCR parser and Sites Worker suite `39 passed` (22 parser, 17 Worker); JavaScript syntax checks, Python compile, Worker build, ESM artifact validation, and `git diff --check` passed. The Python `pytest` package is unavailable in this environment; no backend Python behavior changed.
+- Owner-private ChatGPT Site version 21 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site. Site source commit: `75c595a28b28192a973b83e4b114fa16a60e28dd`.
+- The custom-domain server was not accessed. To update its copy of the page, deploy the GitHub commit and restart only `sportsmatch-web.service`; `napoli-monitor.service` was not accessed or changed. No betting screenshot, API key, Telegram token, or server credential was committed.

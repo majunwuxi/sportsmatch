@@ -207,13 +207,13 @@
     const highlighted = parsedPicks.filter((pick) => pick.highlighted).length;
     $("ocrCount").textContent = "候选 " + parsedPicks.length + " 项 · 深色选区 " + selectionRegionCount + " 块 · 按选区建单 " + highlighted + " 项 · 当前勾选 " + picks.length + " 项 · 投入 " + money(total);
     $("ocrProfit").textContent = minimum === null
-      ? "请选择项目、核对SP并分配金额。"
+      ? "尚无已勾选的投注项。"
       : "单项命中时净利润区间：" + money(minimum) + " 至 " + money(Math.max(...valid.map((pick) => Number(pick.stake) * Number(pick.odds) - total))) + "。跨玩法同时命中时返奖会叠加。";
   }
 
   function balanceOcrPicks() {
     const picks = selectedPicks();
-    const budget = Number($("budget").value);
+    const budget = Number($("ocrBudget").value);
     if (!Number.isInteger(budget) || budget < 2 || budget % 2) throw Error("预算必须是2元的正整数倍。");
     if (!picks.length) throw Error("请先勾选至少一个识别出的投注项。");
     if (picks.length > budget / 2) throw Error("预算不足以给每个选中项目至少分配2元。");
@@ -751,7 +751,8 @@
         $("market").value = (parsedPicks.find((row) => row.highlighted) || parsedPicks[0]).market;
         renderRows();
       }
-      $("simulatorManual").hidden = false;
+      const hasRecognizedSelections = parsedPicks.some((row) => row.highlighted && row.selection && !row.unrecognized);
+      $("simulatorManual").hidden = hasRecognizedSelections;
       const highlighted = parsedPicks.filter((row) => row.highlighted).length;
       const recognizedLabels = parsedPicks.filter((row) => row.highlighted && row.selection && !row.unrecognized).length;
       const recognizedOdds = parsedPicks.filter((row) => row.highlighted && row.odds !== null).length;
