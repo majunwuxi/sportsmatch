@@ -206,3 +206,12 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Verification: OCR parser and Site Worker suite `45/45`; packaged Site Worker tests `23/23`; inline script and Worker syntax checks, Worker build, ESM artifact validation, and `git diff --check` passed. The renderer test executed the PNG creation/download path with sample data, checking bilingual team labels, grouped wagers, amounts, total, and no odds.
 - Owner-only Site version 28 deployed at https://bm.sendmymail.top and https://wellmax-match-monitor.letnek-majun.chatgpt.site. Site source commit: `096acc9d4e53d0f1dc523a26117908a2b562b7a0`.
 - GitHub implementation commits: `df228f1031c7b195b19d9487a3dca239c8f8a5aa`, `934871a934dd7ec7f735c7e5bbbd4bdd679ead7f`, and `70872766f3b6627d8e7cd4a0d82ee7974cce49e2`. No backend service was changed or restarted; `napoli-monitor.service` was not accessed or changed.
+
+
+## 2026-10-21 — Completed-task image disable and screenshot drag-and-drop
+
+- Regression coverage confirms that the “生成投注图片” button receives `disabled` for finished tasks and retains the gray disabled styling. The task status is also shown in the button tooltip.
+- The OCR upload card accepts a single dropped file and retains click-to-select. Drag-enter/drag-over highlight the dropzone and set the copy cursor; drop clears the highlight, forwards the file through the same local preview and OCR path, and rejects multi-file drops. Only PNG, JPEG, and WebP are accepted, with the existing 15 MB cap.
+- Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 46/46 passed (22 parser, 24 Site Worker). `node --test worker/test.mjs` in the packaged Site checkout — 24/24 passed. `node --check` passed for `ocr-ui.js`, the Site Worker, and the inline dashboard script. Site Worker build and ESM artifact validation passed; `git diff --check` passed.
+- Site owner-only version 29 deployed successfully at https://bm.sendmymail.top and https://wellmax-match-monitor.letnek-majun.chatgpt.site. Site source commit: `65cc01d97427b030ae42f078ae413c702cf92d78`. GitHub code commits: `e07752ae1dee11fb790fd3ed9e81ef5a5a5be082`, `9b469277e3e2c682ec05f2b47516d6317a88bd8b`, `6b008befca19c46f6bae74df77d83d738da64105`, and `c42a36d031bb477234d32702f53de7aa41a939fd`.
+- This is a front-end-only change. The independent Python backend was not modified, and neither `sportsmatch-web.service` nor `napoli-monitor.service` was restarted. No API keys, Telegram tokens, server credentials, screenshots, or betting records were included.
