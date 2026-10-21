@@ -172,5 +172,6 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 
 - The top dashboard now uses two responsive columns: the left side stacks “查找比赛” and “创建监测任务”, while “监测任务” occupies the right side. A horizontal divider separates this area from the simulator.
 - The simulator now spans the available page width as a single centered section. At viewport widths up to 900px, the upper dashboard collapses to one column.
-- Verification: Node OCR parser and Sites Worker tests `41/41`, including DOM section order and responsive layout assertions.
-- The Site remains owner-private.
+- Verification: Node OCR parser and Sites Worker tests `41/41`, including DOM section order and responsive layout assertions. JavaScript syntax checks, Python compile, inline dashboard script syntax, and `git diff --check` passed. The targeted Python test could not run because `pytest` is not installed.
+- Owner-only ChatGPT Site version 24 deployed successfully at https://bm.sendmymail.top and https://wellmax-match-monitor.letnek-majun.chatgpt.site. The connected custom domain and TLS status are active; the access allowlist contains only the owner. Site source commit: `e92a33d2df248d6e5816a8cc076b55d07ef49087`.
+- `sportsmatch.sendmymail.top` is a separate amstd backend/frontend deployment and was not remotely changed in this update. No API key, Telegram token, betting data, or server credentials were included.
