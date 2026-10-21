@@ -5,6 +5,7 @@
   let screenshotUrl = null;
   let parsedPicks = null;
   let showAllCandidates = false;
+  let selectionRegionCount = 0;
 
   function setOcrStatus(message, error = false) {
     const node = $("ocrStatus");
@@ -200,7 +201,7 @@
     const valid = picks.filter((pick) => validateRow(pick).ok && Number(pick.stake) >= 2);
     const minimum = valid.length ? Math.min(...valid.map((pick) => Number(pick.stake) * Number(pick.odds) - total)) : null;
     const highlighted = parsedPicks.filter((pick) => pick.highlighted).length;
-    $("ocrCount").textContent = "候选 " + parsedPicks.length + " 项 · 深色底选中 " + highlighted + " 项 · 当前勾选 " + picks.length + " 项 · 投入 " + money(total);
+    $("ocrCount").textContent = "候选 " + parsedPicks.length + " 项 · 深色选区 " + selectionRegionCount + " 块 · 已匹配 " + highlighted + " 项 · 当前勾选 " + picks.length + " 项 · 投入 " + money(total);
     $("ocrProfit").textContent = minimum === null
       ? "请选择项目、核对SP并分配金额。"
       : "单项命中时净利润区间：" + money(minimum) + " 至 " + money(Math.max(...valid.map((pick) => Number(pick.stake) * Number(pick.odds) - total))) + "。跨玩法同时命中时返奖会叠加。";
@@ -263,6 +264,7 @@
   function clearOcr() {
     parsedPicks = null;
     showAllCandidates = false;
+    selectionRegionCount = 0;
     clearOcrConfirmation();
     $("ocrReview").hidden = true;
     $("simulatorManual").hidden = true;
@@ -299,6 +301,40 @@
     return words;
   }
 
+  async function recognizeSelectedRegions(worker, ocrCanvas, regions) {
+    if (!regions.length) return [];
+    const cropResults = [];
+    const psm = globalThis.Tesseract?.PSM || {};
+    await worker.setParameters({ tessedit_pageseg_mode: psm.SINGLE_BLOCK || "6" });
+    try {
+      for (let index = 0; index < regions.length; index++) {
+        const region = regions[index];
+        const sourceWidth = Math.max(1, region.x1 - region.x0);
+        const sourceHeight = Math.max(1, region.y1 - region.y0);
+        const upscale = Math.max(1, Math.min(4, 3000 / Math.max(sourceWidth, sourceHeight), Math.sqrt(4_000_000 / (sourceWidth * sourceHeight))));
+        const crop = document.createElement("canvas");
+        crop.width = Math.max(sourceWidth, Math.floor(sourceWidth * upscale));
+        crop.height = Math.max(sourceHeight, Math.floor(sourceHeight * upscale));
+        const context = crop.getContext("2d", { willReadFrequently: true });
+        context.imageSmoothingEnabled = true;
+        context.drawImage(ocrCanvas, region.x0, region.y0, sourceWidth, sourceHeight, 0, 0, crop.width, crop.height);
+        setOcrStatus("正在放大识别深色选区：" + (index + 1) + "/" + regions.length + "…");
+        const result = await worker.recognize(crop, {}, { blocks: true });
+        cropResults.push({
+          region,
+          words: flattenOcrWords(result.data),
+          scaleX: crop.width / sourceWidth,
+          scaleY: crop.height / sourceHeight,
+          cropWidth: crop.width,
+          cropHeight: crop.height,
+        });
+      }
+    } finally {
+      await worker.setParameters({ tessedit_pageseg_mode: psm.AUTO || "3" });
+    }
+    return cropResults;
+  }
+
   async function imageCanvases(file) {
     const bitmap = await createImageBitmap(file);
     const scale = Math.min(2, 2600 / Math.max(bitmap.width, bitmap.height));
@@ -322,6 +358,7 @@
     const file = $("betScreenshot").files?.[0];
     parsedPicks = null;
     showAllCandidates = false;
+    selectionRegionCount = 0;
     clearOcrConfirmation();
     $("ocrReview").hidden = true;
     $("simulatorManual").hidden = true;
@@ -345,11 +382,13 @@
     $("simulatorManual").hidden = true;
     parsedPicks = null;
     showAllCandidates = false;
+    selectionRegionCount = 0;
     try {
       setOcrStatus("正在载入中文识别引擎（首次使用需联网下载并缓存）…");
       await loadTesseract();
       const canvases = await imageCanvases(screenshotFile);
       const selectionRegions = detectSelectedRegions(canvases.color, canvases.ocr);
+      selectionRegionCount = selectionRegions.length;
       const worker = await Tesseract.createWorker(["chi_sim", "eng"], 1, {
         logger: (event) => {
           if (event.status) setOcrStatus("截图识别中：" + event.status + (event.progress ? " " + Math.round(event.progress * 100) + "%" : ""));
@@ -357,7 +396,10 @@
       });
       try {
         const result = await worker.recognize(canvases.ocr, {}, { blocks: true });
-        parsedPicks = MatchMonitorOCR.parse(flattenOcrWords(result.data), canvases.width, canvases.height, (bbox) => MatchMonitorOCR.containsSelectedRegion(bbox, selectionRegions))
+        const pageWords = flattenOcrWords(result.data);
+        const cropResults = await recognizeSelectedRegions(worker, canvases.ocr, selectionRegions);
+        const enhancedWords = MatchMonitorOCR.mergeSelectedRegionWords(pageWords, cropResults);
+        parsedPicks = MatchMonitorOCR.parse(enhancedWords, canvases.width, canvases.height, (bbox) => MatchMonitorOCR.containsSelectedRegion(bbox, selectionRegions))
           .map((row) => ({ ...row, enabled: row.highlighted, stake: 0 }));
       } finally {
         await worker.terminate();
@@ -373,8 +415,11 @@
       const highlighted = parsedPicks.filter((row) => row.highlighted).length;
       setOcrStatus(parsedPicks.length
         ? highlighted
-          ? "识别出 " + parsedPicks.length + " 个候选项，检测到 " + highlighted + " 个深色底选项；当前仅预选这些项目。其他候选项可展开查看。请核对文字与SP。"
-          : "识别到 " + parsedPicks.length + " 个候选项，但没有检测到深色底选项，因此没有自动勾选。可展开全部候选项手动选择，或换一张清晰截图重试。"
+          ? "识别出 " + parsedPicks.length + " 个候选项，检测到 " + selectionRegionCount + " 块深色选区并匹配到 " + highlighted + " 项；当前仅预选匹配项目。其他候选项可展开查看。"
+            + (highlighted < selectionRegionCount ? "选区与识别项数量不一致，请展开候选项检查是否漏项。" : "请核对文字与SP。")
+          : selectionRegionCount
+            ? "检测到 " + selectionRegionCount + " 块深色选区，但暂未匹配到投注项。可展开候选项手动补选，或换一张清晰截图重试。"
+            : "识别到 " + parsedPicks.length + " 个候选项，但没有检测到深色底选项，因此没有自动勾选。可展开全部候选项手动选择，或换一张清晰截图重试。"
         : "没有识别到可用投注项。请换一张包含玩法标题、选项和SP的清晰截图，或手动填写模拟器。", !parsedPicks.length);
     } catch (error) {
       $("simulatorManual").hidden = false;

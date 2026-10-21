@@ -304,6 +304,48 @@
     return (regions || []).some((region) => cx >= region.x0 && cx <= region.x1 && cy >= region.y0 && cy <= region.y1);
   }
 
+  function isSelectionLabel(text) {
+    const value = normalize(text);
+    return scoreOptions.has(value) || halfFullOptions.has(value) || totalGoalOptions.has(value)
+      || resultOptions.has(value) || value === "主胜" || value === "客胜";
+  }
+
+  function hasSelectionLabel(words, width, height) {
+    const validWords = (words || []).filter((word) => normalize(word.text)
+      && Number(word.confidence ?? 100) >= 20 && getBox(word).right > getBox(word).left);
+    const tokens = mergeFragments(groupLines(validWords, height), width);
+    return tokens.some((word) => isSelectionLabel(word.text));
+  }
+
+  function mergeSelectedRegionWords(pageWords, cropResults) {
+    const replacements = (cropResults || []).filter((item) => {
+      if (!item?.region || !Array.isArray(item.words) || !item.words.length) return false;
+      const cropWidth = Number(item.cropWidth) || (item.region.x1 - item.region.x0) * (Number(item.scaleX) || 1);
+      const cropHeight = Number(item.cropHeight) || (item.region.y1 - item.region.y0) * (Number(item.scaleY) || 1);
+      return hasSelectionLabel(item.words, cropWidth, cropHeight);
+    });
+    const regions = replacements.map((item) => item.region);
+    const retained = (pageWords || []).filter((word) => {
+      const box = getBox(word);
+      return !containsSelectedRegion({ x0: box.left, y0: box.top, x1: box.right, y1: box.bottom }, regions);
+    });
+    const enhanced = replacements.flatMap((item) => {
+      const scaleX = Number(item.scaleX) > 0 ? Number(item.scaleX) : 1;
+      const scaleY = Number(item.scaleY) > 0 ? Number(item.scaleY) : 1;
+      return item.words.map((word) => {
+        const box = getBox(word);
+        const bbox = {
+          x0: item.region.x0 + box.left / scaleX,
+          y0: item.region.y0 + box.top / scaleY,
+          x1: item.region.x0 + box.right / scaleX,
+          y1: item.region.y0 + box.bottom / scaleY,
+        };
+        return { ...word, bbox };
+      });
+    });
+    return [...retained, ...enhanced];
+  }
+
   function invertGrayPixels(data) {
     for (let offset = 0; offset < data.length; offset += 4) {
       // The selected-cell text is white; binarize it against a white background.
@@ -315,5 +357,5 @@
     return data;
   }
 
-  root.MatchMonitorOCR = { parse, validatePick, normalize, detectSelectedRegions, containsSelectedRegion, invertGrayPixels };
+  root.MatchMonitorOCR = { parse, validatePick, normalize, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, mergeSelectedRegionWords, invertGrayPixels };
 })(globalThis);

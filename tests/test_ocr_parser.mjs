@@ -85,6 +85,40 @@ test('detects dark selected cells, filters a full-width button, and inverts whit
   assert.deepEqual([...gray], [255, 255, 255, 255, 0, 0, 0, 255]);
 });
 
+test('replaces whole-page text inside selected cells with upscaled cell OCR', () => {
+  const regions = [
+    { x0: 112, y0: 286, x1: 214, y1: 331 },
+    { x0: 215, y0: 286, x1: 317, y1: 331 },
+    { x0: 318, y0: 286, x1: 421, y1: 331 },
+    { x0: 422, y0: 286, x1: 524, y1: 331 },
+    { x0: 525, y0: 332, x1: 730, y1: 376 },
+  ];
+  const selections = [
+    ['2:0', '16'], ['2:1', '10'], ['3:0', '50'], ['3:1', '30'], ['胜其他', '150'],
+  ];
+  const pageWords = [word('比分', 340, 250), word('1:0', 25, 294), word('9', 30, 311)];
+  for (const region of regions) {
+    pageWords.push(word('1:0', region.x0 + 30, region.y0 + 6), word('9', region.x0 + 32, region.y0 + 23));
+  }
+  const cropResults = regions.map((region, index) => {
+    const [selection, odds] = selections[index];
+    return {
+      region,
+      words: [word(selection, 20, 30, 96, selection.length * 9), word(odds, 20, 95, 96, 18)],
+      scaleX: 4,
+      scaleY: 4,
+      cropWidth: (region.x1 - region.x0) * 4,
+      cropHeight: (region.y1 - region.y0) * 4,
+    };
+  });
+  const enhancedWords = parser.mergeSelectedRegionWords(pageWords, cropResults);
+  assert.equal(enhancedWords.some((item) => item.text === '1:0' && item.bbox.x0 > 110), false);
+  assert.equal(enhancedWords.some((item) => item.text === '1:0' && item.bbox.x0 < 100), true);
+  const rows = parser.parse(enhancedWords, 749, 902, (bbox) => parser.containsSelectedRegion(bbox, regions));
+  const selected = rows.filter((row) => row.highlighted).map(({ selection, odds }) => [selection, odds]);
+  assert.deepEqual(JSON.stringify(selected), JSON.stringify(selections.map(([selection, odds]) => [selection, Number(odds)])));
+});
+
 test('root page and Sites Worker serve the same OCR assets without sending the image', async () => {
   assert.match(html, /<script src="\/ocr-parser\.js"><\/script>/);
   assert.match(html, /<script src="\/ocr-ui\.js"><\/script>/);
@@ -93,6 +127,9 @@ test('root page and Sites Worker serve the same OCR assets without sending the i
   assert.equal(await parserResponse.text(), source);
   assert.equal(await uiResponse.text(), uiSource);
   assert.match(uiSource, /worker\.recognize\(canvases\.ocr/);
+  assert.match(uiSource, /recognizeSelectedRegions/);
+  assert.match(uiSource, /mergeSelectedRegionWords/);
+  assert.match(uiSource, /SINGLE_BLOCK/);
   assert.match(uiSource, /ocrConfirm/);
   assert.match(uiSource, /逐项核对/);
   assert.doesNotMatch(uiSource, /FormData|fetch\(screenshotFile/);

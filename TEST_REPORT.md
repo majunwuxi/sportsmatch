@@ -85,3 +85,10 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` passed (15 tests); Site Worker tests passed (10 tests); Worker syntax check, Site build, and ESM artifact validation passed.
 - Scope: selection-region detection was checked against the supplied image. Full Chinese OCR end-to-end reprocessing in a live browser has not been performed yet, so the user should verify the selected labels and SP values after refreshing the private Site.
 - No API key, Telegram token, server credential, or private betting record was committed.
+## 2026-10-21 — Selected-cell OCR zoom follow-up
+
+- Regression reproduced with the supplied 749×902 ticket image: dark-fill detection found five selected cells, while whole-page OCR matched only two picks.
+- The browser now crops and enlarges each detected selected cell (up to 4×), recognizes it as a single text block, and maps crop word coordinates back to the source image. When a crop contains a supported selection label, its text and SP replace the whole-page OCR words inside that cell; otherwise, the whole-page OCR result is retained as a fallback. The review count shows dark regions and matched picks separately and warns when they differ.
+- Screenshot diagnostic: the local Tesseract 5 English model recognized four score picks and SPs from enlarged crops: 2:0/16, 2:1/10, 3:0/50, and 3:1/30. The local environment does not have Chinese trained data, so the Chinese “胜其他” crop and full browser OCR with the Site's chi_sim+eng models have not been independently verified end to end. The screenshot remains browser-local and was not committed.
+- Verification: root OCR/Worker tests passed (16 tests); Site Worker tests passed (10 tests); Worker syntax, Site build, and ESM artifact validation passed.
+- No API key, Telegram token, server credential, private betting record, or screenshot was committed.
