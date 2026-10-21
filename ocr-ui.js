@@ -676,6 +676,7 @@
     selectionRegionCount = 0;
     let scoreGrid = null;
     let scoreGridRows = [];
+    let scoreListRows = [];
     try {
       setOcrStatus("正在载入 PaddleOCR.js（首次使用需联网下载并缓存模型）…");
       const canvases = await imageCanvases(screenshotFile);
@@ -738,7 +739,8 @@
         parsedPicks = [...otherCandidates, ...selectedRows]
           .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x)
           .map((row) => ({ ...row, enabled: row.highlighted, stake: 0 }));
-        $("listedScores").value = MatchMonitorOCR.listedScoresFromRows(parsedPicks).join(", ");
+        scoreListRows = [...parsedPicks, ...pageCandidatesWithGrid, ...selectedRows, ...scoreGridRows];
+        $("listedScores").value = MatchMonitorOCR.listedScoresFromRows(scoreListRows).join(", ");
       } finally {
         await worker.terminate();
       }
@@ -753,7 +755,7 @@
       const highlighted = parsedPicks.filter((row) => row.highlighted).length;
       const recognizedLabels = parsedPicks.filter((row) => row.highlighted && row.selection && !row.unrecognized).length;
       const recognizedOdds = parsedPicks.filter((row) => row.highlighted && row.odds !== null).length;
-      const listedScoreCount = MatchMonitorOCR.listedScoresFromRows(parsedPicks).length;
+      const listedScoreCount = MatchMonitorOCR.listedScoresFromRows(scoreListRows).length;
       const gridScoreCount = scoreGridRows.filter((row) => row.odds !== null).length;
       const gridStatus = scoreGrid
         ? "逐格识别 SP " + gridScoreCount + "/28；缺失SP的标准比分仍列入候选项，可展开补录"

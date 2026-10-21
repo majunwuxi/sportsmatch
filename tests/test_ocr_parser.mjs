@@ -179,6 +179,18 @@ test('keeps all 28 table options available when an individual SP cannot be read'
   assert.match(uiSource, /缺失SP的标准比分仍列入候选项/);
 });
 
+test('adds a selected-region SP to the screenshot list when its score-grid cell read is missing', () => {
+  const rows = parser.scoreGridRows.flat().map((selection) => ({
+    market: 'correct_score', selection, odds: selection === '2:1' ? null : 10,
+  }));
+  const selectedRegion = { market: 'correct_score', selection: '2:1', odds: 7 };
+  const combined = [...rows, selectedRegion];
+  assert.equal(parser.listedScoresFromRows(rows).length, 27);
+  assert.equal(parser.listedScoresFromRows(combined).length, 28);
+  assert.match(uiSource, /scoreListRows = \[\.\.\.parsedPicks, \.\.\.pageCandidatesWithGrid, \.\.\.selectedRows, \.\.\.scoreGridRows\]/);
+  assert.match(uiSource, /listedScoresFromRows\(scoreListRows\)/);
+});
+
 test('merges whole-page and per-cell SP reads without losing decimals or lower-confidence values', () => {
   const correctedDecimal = parser.preferScoreOdds(
     { market: 'correct_score', selection: '3:1', odds: 135, confidence: 91, highlighted: true },
