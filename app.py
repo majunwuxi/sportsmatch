@@ -564,3 +564,10 @@ def team_logo(team_id:int, _:str=Depends(auth)):
         raise HTTPException(status_code=404,detail="球队队徽不存在")
     image=fetch_team_logo(logo_url)
     return Response(image,media_type="image/png",headers={"Cache-Control":"private, max-age=86400","X-Content-Type-Options":"nosniff"})
+
+@app.get("/brand-logo.webp")
+def brand_logo(_:str=Depends(auth)):
+    logo=Path(__file__).with_name("assets")/"match-monitor-logo.webp"
+    if not logo.is_file():
+        raise HTTPException(status_code=404,detail="网站标志图片不存在")
+    return FileResponse(logo,media_type="image/webp",headers={"Cache-Control":"private, max-age=86400","X-Content-Type-Options":"nosniff"})

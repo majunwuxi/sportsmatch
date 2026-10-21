@@ -155,7 +155,7 @@ def test_total_goals_seven_plus_and_handicap_other_side():
     assert r['payout']==12
 
 def test_auth(client):
-    for path in ['/','/ocr-parser.js','/ocr-ui.js','/teams-map.js','/team-logo/569.png','/api/tasks','/api/fixtures?date=2026-10-20','/api/usage','/api/health']:
+    for path in ['/','/ocr-parser.js','/ocr-ui.js','/teams-map.js','/team-logo/569.png','/brand-logo.webp','/api/tasks','/api/fixtures?date=2026-10-20','/api/usage','/api/health']:
         assert client.get(path).status_code==401
     assert client.get('/docs').status_code==404
     assert client.post('/api/tasks',headers={'origin':'https://evil.example'}).status_code==403
@@ -387,11 +387,19 @@ def test_team_logo_proxy_only_fetches_allowlisted_team_images(client,monkeypatch
     assert response.status_code==200
     assert response.content==image
     assert response.headers['content-type']=='image/png'
-    assert response.headers['cache-control']=='no-store'
+    assert response.headers['cache-control']=='private, max-age=86400'
     assert response.headers['x-content-type-options']=='nosniff'
     assert calls==['https://media.api-sports.io/football/teams/569.png']
     assert client.get('/team-logo/999999.png',auth=('test','test-password')).status_code==404
     assert calls==['https://media.api-sports.io/football/teams/569.png']
+
+def test_brand_logo_is_authenticated_and_serves_webp(client):
+    response=client.get('/brand-logo.webp',auth=('test','test-password'))
+    assert response.status_code==200
+    assert response.headers['content-type']=='image/webp'
+    assert response.headers['cache-control']=='private, max-age=86400'
+    assert response.headers['x-content-type-options']=='nosniff'
+    assert response.content[:4]==b'RIFF' and response.content[8:12]==b'WEBP'
 
 def test_ocr_assets_are_authenticated_and_local_code_only(client):
     for path, marker in [('/ocr-parser.js','MatchMonitorOCR'),('/ocr-ui.js','createImageBitmap(file)')]:
