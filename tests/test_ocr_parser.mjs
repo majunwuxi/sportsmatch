@@ -94,7 +94,7 @@ test('replaces whole-page text inside selected cells with upscaled cell OCR', ()
     { x0: 525, y0: 332, x1: 730, y1: 376 },
   ];
   const selections = [
-    ['2:0', '16'], ['2:1', '10'], ['3:0', '50'], ['3:1', '30'], ['胜其他', '150'],
+    ['4:0', '17'], ['4:1', '23'], ['5:0', '29'], ['5:1', '31'], ['平其他', '37'],
   ];
   const pageWords = [word('比分', 340, 250), word('1:0', 25, 294), word('9', 30, 311)];
   for (const region of regions) {
@@ -119,6 +119,50 @@ test('replaces whole-page text inside selected cells with upscaled cell OCR', ()
   assert.deepEqual(JSON.stringify(selected), JSON.stringify(selections.map(([selection, odds]) => [selection, Number(odds)])));
 });
 
+test('repairs a misread selected score label and maps a padded cell crop back to the screenshot', () => {
+  const region = { x0: 100, y0: 200, x1: 200, y1: 250 };
+  const cropWords = [word('1Z', 50, 40, 88, 20), word('17', 50, 110, 95, 18)];
+  assert.equal(parser.hasSelectionLabel(cropWords, 400, 200), true);
+  assert.equal(parser.selectionLabelConfidence(cropWords, 400, 200) > 0, true);
+  assert.equal(parser.hasSelectionLabel([word('50', 50, 150)], 400, 200), false);
+  const enhanced = parser.mergeSelectedRegionWords([], [{
+    region,
+    words: cropWords,
+    scaleX: 4,
+    scaleY: 4,
+    cropWidth: 400,
+    cropHeight: 200,
+    offsetX: 40,
+    offsetY: 40,
+  }]);
+  const rows = parser.parse([word('比分', 280, 160), ...enhanced], 400, 400,
+    (bbox) => parser.containsSelectedRegion(bbox, [region]));
+  assert.equal(rows.some((row) => row.selection === '1:2' && row.odds === 17 && row.highlighted), true);
+});
+
+test('matches every detected selection when a score label is OCR-split and an other-score label is Chinese', () => {
+  const regions = [
+    { x0: 40, y0: 100, x1: 140, y1: 150 },
+    { x0: 145, y0: 100, x1: 245, y1: 150 },
+    { x0: 250, y0: 100, x1: 350, y1: 150 },
+    { x0: 355, y0: 100, x1: 455, y1: 150 },
+  ];
+  const synthetic = [
+    ['1Z', '17', '1:2'], ['4:0', '23', '4:0'],
+    ['4:1', '29', '4:1'], ['平其他', '37', '平其他'],
+  ];
+  const cropResults = regions.map((region, index) => ({
+    region,
+    words: [word(synthetic[index][0], 50, 35, 91), word(synthetic[index][1], 50, 110, 94)],
+    scaleX: 4, scaleY: 4, cropWidth: 400, cropHeight: 200, offsetX: 40, offsetY: 40,
+  }));
+  const words = [word('比分', 300, 50), ...parser.mergeSelectedRegionWords([], cropResults)];
+  const rows = parser.parse(words, 500, 300,
+    (bbox) => parser.containsSelectedRegion(bbox, regions));
+  assert.deepEqual(JSON.stringify(rows.filter((row) => row.highlighted).map(({ selection, odds }) => [selection, odds])),
+    JSON.stringify(synthetic.map(([, odds, selection]) => [selection, Number(odds)])));
+});
+
 test('root page and Sites Worker serve the same OCR assets without sending the image', async () => {
   assert.match(html, /<script src="\/ocr-parser\.js"><\/script>/);
   assert.match(html, /<script src="\/ocr-ui\.js"><\/script>/);
@@ -130,6 +174,10 @@ test('root page and Sites Worker serve the same OCR assets without sending the i
   assert.match(uiSource, /recognizeSelectedRegions/);
   assert.match(uiSource, /mergeSelectedRegionWords/);
   assert.match(uiSource, /SINGLE_BLOCK/);
+  assert.match(uiSource, /selectionWhitelist/);
+  assert.match(uiSource, /selectionLabelConfidence/);
+  assert.match(uiSource, /\[colorCanvas, ocrCanvas\]/);
+  assert.match(uiSource, /offsetX: paddingX/);
   assert.match(uiSource, /ocrConfirm/);
   assert.match(uiSource, /逐项核对/);
   assert.doesNotMatch(uiSource, /FormData|fetch\(screenshotFile/);

@@ -310,11 +310,36 @@
       || resultOptions.has(value) || value === "主胜" || value === "客胜";
   }
 
+  function repairSelectedScoreLabel(text) {
+    const value = normalize(text).toUpperCase().replace(/[OQ]/g, "0").replace(/Z/g, "2");
+    const match = value.match(/^([0-5])[:.]?([0-5])$/);
+    if (!match) return null;
+    const score = match[1] + ":" + match[2];
+    return scoreOptions.has(score) ? score : null;
+  }
+
   function hasSelectionLabel(words, width, height) {
+    return selectionLabelConfidence(words, width, height) >= 0;
+  }
+
+  function selectionLabelConfidence(words, width, height) {
     const validWords = (words || []).filter((word) => normalize(word.text)
       && Number(word.confidence ?? 100) >= 20 && getBox(word).right > getBox(word).left);
     const tokens = mergeFragments(groupLines(validWords, height), width);
-    return tokens.some((word) => isSelectionLabel(word.text));
+    let best = -1;
+    for (const word of tokens) {
+      const confidence = Number(word.confidence ?? 50);
+      if (isSelectionLabel(word.text)) {
+        best = Math.max(best, confidence);
+        continue;
+      }
+      // A selected-score crop contains only the option and SP. Keep repairs in
+      // the upper part of the cell so a two-digit SP cannot become a score.
+      if (getBox(word).cy <= height * 0.5 && repairSelectedScoreLabel(word.text)) {
+        best = Math.max(best, confidence * 0.85);
+      }
+    }
+    return best;
   }
 
   function mergeSelectedRegionWords(pageWords, cropResults) {
@@ -332,15 +357,21 @@
     const enhanced = replacements.flatMap((item) => {
       const scaleX = Number(item.scaleX) > 0 ? Number(item.scaleX) : 1;
       const scaleY = Number(item.scaleY) > 0 ? Number(item.scaleY) : 1;
-      return item.words.map((word) => {
+      const cropWidth = Number(item.cropWidth) || (item.region.x1 - item.region.x0) * scaleX;
+      const cropHeight = Number(item.cropHeight) || (item.region.y1 - item.region.y0) * scaleY;
+      const offsetX = Number(item.offsetX) || 0;
+      const offsetY = Number(item.offsetY) || 0;
+      const cropTokens = mergeFragments(groupLines(item.words, cropHeight), cropWidth);
+      return cropTokens.map((word) => {
         const box = getBox(word);
+        const repairedScore = box.cy <= cropHeight * 0.5 ? repairSelectedScoreLabel(word.text) : null;
         const bbox = {
-          x0: item.region.x0 + box.left / scaleX,
-          y0: item.region.y0 + box.top / scaleY,
-          x1: item.region.x0 + box.right / scaleX,
-          y1: item.region.y0 + box.bottom / scaleY,
+          x0: item.region.x0 + (box.left - offsetX) / scaleX,
+          y0: item.region.y0 + (box.top - offsetY) / scaleY,
+          x1: item.region.x0 + (box.right - offsetX) / scaleX,
+          y1: item.region.y0 + (box.bottom - offsetY) / scaleY,
         };
-        return { ...word, bbox };
+        return { ...word, text: repairedScore || word.text, bbox };
       });
     });
     return [...retained, ...enhanced];
@@ -357,5 +388,5 @@
     return data;
   }
 
-  root.MatchMonitorOCR = { parse, validatePick, normalize, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, mergeSelectedRegionWords, invertGrayPixels };
+  root.MatchMonitorOCR = { parse, validatePick, normalize, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels };
 })(globalThis);

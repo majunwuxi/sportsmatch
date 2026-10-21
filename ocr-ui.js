@@ -301,38 +301,64 @@
     return words;
   }
 
-  async function recognizeSelectedRegions(worker, ocrCanvas, regions) {
+  async function recognizeSelectedRegions(worker, colorCanvas, ocrCanvas, regions) {
     if (!regions.length) return [];
     const cropResults = [];
     const psm = globalThis.Tesseract?.PSM || {};
-    await worker.setParameters({ tessedit_pageseg_mode: psm.SINGLE_BLOCK || "6" });
+    const selectionWhitelist = "0123456789:.+胜平负其他主客";
+    await worker.setParameters({
+      tessedit_pageseg_mode: psm.SINGLE_BLOCK || "6",
+      tessedit_char_whitelist: selectionWhitelist,
+    });
     try {
       for (let index = 0; index < regions.length; index++) {
         const region = regions[index];
         const sourceWidth = Math.max(1, region.x1 - region.x0);
         const sourceHeight = Math.max(1, region.y1 - region.y0);
         const upscale = Math.max(1, Math.min(4, 3000 / Math.max(sourceWidth, sourceHeight), Math.sqrt(4_000_000 / (sourceWidth * sourceHeight))));
-        const crop = document.createElement("canvas");
-        crop.width = Math.max(sourceWidth, Math.floor(sourceWidth * upscale));
-        crop.height = Math.max(sourceHeight, Math.floor(sourceHeight * upscale));
-        const context = crop.getContext("2d", { willReadFrequently: true });
-        context.imageSmoothingEnabled = true;
-        context.drawImage(ocrCanvas, region.x0, region.y0, sourceWidth, sourceHeight, 0, 0, crop.width, crop.height);
-        setOcrStatus("正在放大识别深色选区：" + (index + 1) + "/" + regions.length + "…");
-        const result = await worker.recognize(crop, {}, { blocks: true });
-        cropResults.push({
-          region,
-          words: flattenOcrWords(result.data),
-          scaleX: crop.width / sourceWidth,
-          scaleY: crop.height / sourceHeight,
-          cropWidth: crop.width,
-          cropHeight: crop.height,
-        });
+        const contentWidth = Math.max(sourceWidth, Math.floor(sourceWidth * upscale));
+        const contentHeight = Math.max(sourceHeight, Math.floor(sourceHeight * upscale));
+        const paddingX = Math.max(24, Math.round(Math.min(sourceWidth * 0.16, 32) * upscale));
+        const paddingY = Math.max(24, Math.round(Math.min(sourceHeight * 0.20, 24) * upscale));
+        const variants = [colorCanvas, ocrCanvas];
+        let bestLabelConfidence = -1;
+        for (let variant = 0; variant < variants.length; variant++) {
+          const crop = document.createElement("canvas");
+          crop.width = contentWidth + paddingX * 2;
+          crop.height = contentHeight + paddingY * 2;
+          const context = crop.getContext("2d", { willReadFrequently: true });
+          context.fillStyle = "#fff";
+          context.fillRect(0, 0, crop.width, crop.height);
+          context.imageSmoothingEnabled = true;
+          context.drawImage(variants[variant], region.x0, region.y0, sourceWidth, sourceHeight,
+            paddingX, paddingY, contentWidth, contentHeight);
+          setOcrStatus("正在识别深色选区：" + (index + 1) + "/" + regions.length + (variant ? "（增强图）…" : "（原图）…"));
+          const result = await worker.recognize(crop, {}, { blocks: true });
+          const words = flattenOcrWords(result.data);
+          const cropResult = {
+            region,
+            words,
+            scaleX: contentWidth / sourceWidth,
+            scaleY: contentHeight / sourceHeight,
+            cropWidth: crop.width,
+            cropHeight: crop.height,
+            offsetX: paddingX,
+            offsetY: paddingY,
+          };
+          const labelConfidence = MatchMonitorOCR.selectionLabelConfidence(words, crop.width, crop.height);
+          if (labelConfidence > bestLabelConfidence) {
+            cropResults[index] = cropResult;
+            bestLabelConfidence = labelConfidence;
+          }
+        }
       }
     } finally {
-      await worker.setParameters({ tessedit_pageseg_mode: psm.AUTO || "3" });
+      await worker.setParameters({
+        tessedit_pageseg_mode: psm.AUTO || "3",
+        tessedit_char_whitelist: "",
+      });
     }
-    return cropResults;
+    return cropResults.filter(Boolean);
   }
 
   async function imageCanvases(file) {
@@ -397,7 +423,7 @@
       try {
         const result = await worker.recognize(canvases.ocr, {}, { blocks: true });
         const pageWords = flattenOcrWords(result.data);
-        const cropResults = await recognizeSelectedRegions(worker, canvases.ocr, selectionRegions);
+        const cropResults = await recognizeSelectedRegions(worker, canvases.color, canvases.ocr, selectionRegions);
         const enhancedWords = MatchMonitorOCR.mergeSelectedRegionWords(pageWords, cropResults);
         parsedPicks = MatchMonitorOCR.parse(enhancedWords, canvases.width, canvases.height, (bbox) => MatchMonitorOCR.containsSelectedRegion(bbox, selectionRegions))
           .map((row) => ({ ...row, enabled: row.highlighted, stake: 0 }));
