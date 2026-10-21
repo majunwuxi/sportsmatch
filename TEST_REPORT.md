@@ -198,3 +198,11 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Verification: OCR parser and Site Worker tests `43/43`; packaged Site Worker tests `21/21`; Worker syntax check, build, ESM artifact validation, and `git diff --check` passed.
 - Owner-only Site version 27 deployed successfully at https://bm.sendmymail.top and https://wellmax-match-monitor.letnek-majun.chatgpt.site. Its access policy remains owner-only. Site source commit: `d383787f55a9aa991d6137010142ff0a2132c941`; GitHub layout commit: `0188166786146da65321d4ddc5fbb36c4053bcda`.
 - No backend code or service was changed. `napoli-monitor.service` was not accessed or changed. No API key, Telegram token, screenshot, private betting record, or server credential was committed.
+
+## 2026-10-21 — Downloadable bilingual betting plan image
+
+- Each task card now offers “生成投注图片”. The browser renders and downloads a PNG showing Chinese and English team names, bilingual market headings, selections, per-ticket stake, and total stake; odds/SP values are not included, and the ticket data stays in the browser.
+- The renderer groups mixed-play tickets, formats the kickoff time in Beijing time, and handles an empty wager list. Known clubs use local Chinese aliases; unrecognized names are labeled for translation review.
+- Verification: OCR parser and Site Worker suite `45/45`; packaged Site Worker tests `23/23`; inline script and Worker syntax checks, Worker build, ESM artifact validation, and `git diff --check` passed. The renderer test executed the PNG creation/download path with sample data, checking bilingual team labels, grouped wagers, amounts, total, and no odds.
+- Owner-only Site version 28 deployed at https://bm.sendmymail.top and https://wellmax-match-monitor.letnek-majun.chatgpt.site. Site source commit: `096acc9d4e53d0f1dc523a26117908a2b562b7a0`.
+- GitHub implementation commits: `df228f1031c7b195b19d9487a3dca239c8f8a5aa`, `934871a934dd7ec7f735c7e5bbbd4bdd679ead7f`, and `70872766f3b6627d8e7cd4a0d82ee7974cce49e2`. No backend service was changed or restarted; `napoli-monitor.service` was not accessed or changed.
