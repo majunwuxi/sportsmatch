@@ -146,6 +146,29 @@ def test_poll_does_not_repeat_no_score_notice(monkeypatch,tmp_path):
     m.tick(task)
     assert len(messages)==1 and '状态：未开赛' in messages[0]
 
+def test_existing_database_migration_preserves_tasks_and_tickets(monkeypatch,tmp_path):
+    monkeypatch.setattr(m,'DB',tmp_path/'legacy.sqlite')
+    with m.conn() as c:
+        c.executescript("""
+        CREATE TABLE tasks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, fixture_id INTEGER NOT NULL UNIQUE,
+          home TEXT NOT NULL, away TEXT NOT NULL, kickoff TEXT, start_at TEXT NOT NULL,
+          interval_minutes INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL DEFAULT 'pending', last_score TEXT, last_check TEXT,
+          next_check TEXT NOT NULL, ticket_json TEXT NOT NULL DEFAULT '[]', error TEXT,
+          created_at TEXT NOT NULL
+        );
+        CREATE TABLE usage (utc_day TEXT PRIMARY KEY, requests INTEGER NOT NULL DEFAULT 0);
+        INSERT INTO tasks(fixture_id,home,away,start_at,interval_minutes,next_check,last_score,ticket_json,created_at)
+        VALUES(22,'A','B','2026-10-21T00:00:00+00:00',10,'2026-10-21T00:00:00+00:00','3:0','[{"selection":"3:0","stake":2,"odds":5}]','2026-10-20T00:00:00+00:00');
+        """)
+    m.init_db()
+    with m.conn() as c:
+        row=c.execute('SELECT last_score,settlement_score,ticket_json FROM tasks WHERE fixture_id=22').fetchone()
+        columns={r[1] for r in c.execute('PRAGMA table_info(tasks)')}
+    assert tuple(row)==('3:0','3:0','[{"selection":"3:0","stake":2,"odds":5}]')
+    assert {'settlement_score','half_score','provider_status'}<=columns
+
 def test_index_contains_simulator_and_no_old_score_calculator():
     html=(m.Path(__file__).parents[1]/'index.html').read_text(encoding='utf-8')
     assert '竞彩足球比分投注模拟器' in html
