@@ -140,6 +140,28 @@ test('repairs a misread selected score label and maps a padded cell crop back to
   assert.equal(rows.some((row) => row.selection === '1:2' && row.odds === 17 && row.highlighted), true);
 });
 
+test('scores crop OCR using the page market and preserves SP when its option label is uncertain', () => {
+  const region = { x0: 100, y0: 100, x1: 200, y1: 150 };
+  const metadata = { region, scaleX: 4, scaleY: 4, cropWidth: 480, cropHeight: 280, offsetX: 40, offsetY: 40 };
+  const pageWords = [word('比分', 180, 20)];
+  const incomplete = { ...metadata, words: [word('负', 180, 60, 93), word('29', 180, 160, 95)] };
+  const complete = { ...metadata, words: [word('负其他', 165, 60, 90, 46), word('29', 180, 160, 95)] };
+
+  assert.equal(parser.marketAt(125, pageWords, 400), 'correct_score');
+  assert.equal(parser.marketAt(520, [word('比分', 180, 20), word('总进球', 180, 650)], 1000), 'correct_score');
+  assert.equal(parser.selectionLabelConfidence(incomplete.words, 480, 280, 'correct_score'), -1);
+  assert.ok(parser.scoreSelectedCrop(complete, pageWords, 400, 400) > parser.scoreSelectedCrop(incomplete, pageWords, 400, 400));
+
+  const incompleteRow = parser.parseSelectedRegions([incomplete], pageWords, 400, 400)[0];
+  assert.equal(incompleteRow.unrecognized, true);
+  assert.equal(incompleteRow.odds, 29);
+  const completeRow = parser.parseSelectedRegions([complete], pageWords, 400, 400)[0];
+  assert.equal(completeRow.market, 'correct_score');
+  assert.equal(completeRow.selection, '负其他');
+  assert.equal(completeRow.odds, 29);
+  assert.equal(completeRow.unrecognized, false);
+});
+
 test('matches every detected selection when a score label is OCR-split and an other-score label is Chinese', () => {
   const regions = [
     { x0: 40, y0: 100, x1: 140, y1: 150 },
@@ -213,7 +235,9 @@ test('root page and Sites Worker serve the same OCR assets without sending the i
   assert.match(uiSource, /mergeSelectedRegionWords/);
   assert.match(uiSource, /SINGLE_BLOCK/);
   assert.match(uiSource, /selectionWhitelist/);
-  assert.match(uiSource, /selectionLabelConfidence/);
+  assert.match(uiSource, /scoreSelectedCrop/);
+  assert.match(uiSource, /recognizeBand/);
+  assert.match(uiSource, /SINGLE_LINE/);
   assert.match(uiSource, /parseSelectedRegions/);
   assert.match(uiSource, /按选区建立/);
   assert.doesNotMatch(uiSource, /匹配到/);

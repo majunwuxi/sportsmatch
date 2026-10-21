@@ -322,30 +322,73 @@
     return selectionLabelConfidence(words, width, height) >= 0;
   }
 
-  function selectionLabelConfidence(words, width, height) {
+  function selectionLabelForMarket(text, market) {
+    const value = normalize(text);
+    if (!market) return isSelectionLabel(value);
+    if (market === "correct_score") return scoreOptions.has(value) || Boolean(repairSelectedScoreLabel(value));
+    if (market === "half_full") return halfFullOptions.has(value);
+    if (market === "total_goals") return totalGoalOptions.has(value);
+    if (market === "match_result" || market === "handicap") {
+      return ["胜", "平", "负", "主胜", "客胜"].includes(value);
+    }
+    return false;
+  }
+
+  function marketAt(y, words, height) {
+    const validWords = (words || []).filter((word) => normalize(word.text)
+      && Number(word.confidence ?? 100) >= 20 && getBox(word).right > getBox(word).left);
+    const headings = makeHeadings(groupLines(validWords, height)).sort((a, b) => a.cy - b.cy);
+    const selectedY = Number(y);
+    const priorIndex = headings.reduce((index, heading, current) => heading.cy < selectedY ? current : index, -1);
+    if (priorIndex < 0) return null;
+    const prior = headings[priorIndex];
+    const next = headings[priorIndex + 1];
+    // A later market heading bounds the current section, so keep its context
+    // even when a tall phone screenshot leaves a large gap above the options.
+    if (next && selectedY < next.cy) return prior.market;
+    if (selectedY - prior.bottom <= height * 0.32) return prior.market;
+    return null;
+  }
+
+  function selectionLabelConfidence(words, width, height, market = null) {
     const validWords = (words || []).filter((word) => normalize(word.text)
       && Number(word.confidence ?? 100) >= 20 && getBox(word).right > getBox(word).left);
     const tokens = mergeFragments(groupLines(validWords, height), width);
     let best = -1;
     for (const word of tokens) {
       const confidence = Number(word.confidence ?? 50);
-      if (isSelectionLabel(word.text)) {
+      if (selectionLabelForMarket(word.text, market)) {
         best = Math.max(best, confidence);
         continue;
       }
       // A selected-score crop contains only the option and SP. Keep repairs in
       // the upper part of the cell so a two-digit SP cannot become a score.
-      if (getBox(word).cy <= height * 0.5 && repairSelectedScoreLabel(word.text)) {
+      if (market !== "half_full" && market !== "total_goals" && market !== "match_result" && market !== "handicap"
+        && getBox(word).cy <= height * 0.5 && repairSelectedScoreLabel(word.text)) {
         best = Math.max(best, confidence * 0.85);
       }
     }
     return best;
   }
 
+  function scoreSelectedCrop(item, pageWords, width, height, marketHint = null) {
+    const region = item?.region || { x0: 0, y0: 0, x1: 0, y1: 0 };
+    const contextualMarket = marketHint || marketAt((region.y0 + region.y1) / 2, pageWords, height);
+    const cropWidth = Number(item?.cropWidth) || Math.max(1, region.x1 - region.x0);
+    const cropHeight = Number(item?.cropHeight) || Math.max(1, region.y1 - region.y0);
+    const inferredMarket = contextualMarket || inferSelectedMarket(item?.words || [], cropWidth, cropHeight);
+    const labelConfidence = selectionLabelConfidence(item?.words || [], cropWidth, cropHeight, inferredMarket);
+    if (labelConfidence < 0) return -10000;
+    const row = parseSelectedRegions([item], pageWords, width, height)[0];
+    return 1000 + labelConfidence
+      + (row && !row.unrecognized ? 3000 : 0)
+      + (row?.odds !== null && row?.odds !== undefined ? 1000 : 0)
+      + (row && !row.needsReview ? 500 : 0);
+  }
+
   function parseSelectedRegions(cropResults, pageWords, width, height) {
     const validPageWords = (pageWords || []).filter((word) => normalize(word.text)
       && Number(word.confidence ?? 100) >= 20 && getBox(word).right > getBox(word).left);
-    const pageHeadings = makeHeadings(groupLines(validPageWords, height));
 
     return (cropResults || []).map((item, index) => {
       const region = item?.region || { x0: 0, y0: 0, x1: 0, y1: 0 };
@@ -360,6 +403,9 @@
       const cropWords = (item?.words || []).filter((word) => normalize(word.text)
         && Number(word.confidence ?? 100) >= 20 && getBox(word).right > getBox(word).left);
       const cropTokens = mergeFragments(groupLines(cropWords, cropHeight), cropWidth);
+      const regionOdds = cropTokens.map((word) => ({ word, odds: numericOdds(word), box: getBox(word) }))
+        .filter((entry) => entry.odds !== null && entry.box.cy >= cropHeight * 0.5)
+        .sort((a, b) => b.box.cy - a.box.cy)[0] || null;
       const mappedTokens = cropTokens.map((word) => {
         const box = getBox(word);
         const repairedScore = box.cy <= cropHeight * 0.58 ? repairSelectedScoreLabel(word.text) : null;
@@ -375,7 +421,7 @@
         };
       });
 
-      const contextualMarket = sectionAt(region.y0 + regionHeight / 2, pageHeadings, height);
+      const contextualMarket = marketAt(region.y0 + regionHeight / 2, validPageWords, height);
       const inferredMarket = contextualMarket || inferSelectedMarket(mappedTokens, width, height);
       const cropRows = inferredMarket
         ? parse(mappedTokens, width, height, () => true, inferredMarket)
@@ -394,7 +440,19 @@
         : bestPageRow && !bestPageRow.needsReview ? bestPageRow
           : bestCropRow || bestPageRow;
       if (row) {
-        return { ...row, highlighted: true, selectedRegion: index, unrecognized: false };
+        const odds = row.odds ?? regionOdds?.odds ?? null;
+        const confidence = row.odds === null && regionOdds
+          ? Math.round((Number(row.confidence ?? 0) + Number(regionOdds.word.confidence ?? 0)) / 2)
+          : row.confidence;
+        return {
+          ...row,
+          odds,
+          confidence,
+          needsReview: Boolean(row.needsReview || (row.odds === null && regionOdds)),
+          highlighted: true,
+          selectedRegion: index,
+          unrecognized: false,
+        };
       }
 
       const rawLabel = cropTokens.find((word) => getBox(word).cy <= cropHeight * 0.7
@@ -402,12 +460,14 @@
       const rawText = normalize(rawLabel?.text || "");
       const rawScore = rawLabel && getBox(rawLabel).cy <= cropHeight * 0.7
         ? repairSelectedScoreLabel(rawLabel.text) : null;
-      const confidence = Math.round(Number(rawLabel?.confidence ?? 0));
+      const confidence = Math.round(regionOdds
+        ? (Number(rawLabel?.confidence ?? 0) + Number(regionOdds.word.confidence ?? 0)) / 2
+        : Number(rawLabel?.confidence ?? 0));
       return {
         market: inferredMarket || "correct_score",
         selection: rawScore || rawText,
         handicap: null,
-        odds: null,
+        odds: regionOdds?.odds ?? null,
         confidence,
         highlighted: true,
         needsReview: true,
@@ -475,5 +535,5 @@
     return data;
   }
 
-  root.MatchMonitorOCR = { parse, parseSelectedRegions, validatePick, normalize, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels };
+  root.MatchMonitorOCR = { parse, parseSelectedRegions, scoreSelectedCrop, marketAt, validatePick, normalize, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels };
 })(globalThis);

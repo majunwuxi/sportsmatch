@@ -303,15 +303,33 @@
     return words;
   }
 
-  async function recognizeSelectedRegions(worker, colorCanvas, ocrCanvas, regions) {
+  function shiftOcrWords(words, offsetY = 0) {
+    return words.map((word) => {
+      const box = word.bbox || {};
+      const top = Number(box.y0 ?? word.top ?? 0);
+      const bottom = Number(box.y1 ?? (top + Number(word.height ?? 0)));
+      return { ...word, bbox: { ...box, y0: top + offsetY, y1: bottom + offsetY } };
+    });
+  }
+
+  async function recognizeBand(worker, crop, top, bottom, psmMode, whitelist) {
+    const y0 = Math.max(0, Math.floor(top));
+    const y1 = Math.min(crop.height, Math.max(y0 + 1, Math.ceil(bottom)));
+    const band = document.createElement("canvas");
+    band.width = crop.width;
+    band.height = y1 - y0;
+    band.getContext("2d").drawImage(crop, 0, y0, crop.width, band.height, 0, 0, crop.width, band.height);
+    await worker.setParameters({ tessedit_pageseg_mode: psmMode, tessedit_char_whitelist: whitelist });
+    const result = await worker.recognize(band, {}, { blocks: true });
+    return shiftOcrWords(flattenOcrWords(result.data), y0);
+  }
+
+  async function recognizeSelectedRegions(worker, colorCanvas, ocrCanvas, regions, pageWords, pageWidth, pageHeight) {
     if (!regions.length) return [];
     const cropResults = [];
     const psm = globalThis.Tesseract?.PSM || {};
-    const selectionWhitelist = "0123456789:.+胜平负其他主客";
-    await worker.setParameters({
-      tessedit_pageseg_mode: psm.SINGLE_BLOCK || "6",
-      tessedit_char_whitelist: selectionWhitelist,
-    });
+    const selectionWhitelist = "0123456789:.+OQZz胜平负其他主客";
+    const oddsWhitelist = "0123456789.OQ";
     try {
       for (let index = 0; index < regions.length; index++) {
         const region = regions[index];
@@ -322,45 +340,67 @@
         const contentHeight = Math.max(sourceHeight, Math.floor(sourceHeight * upscale));
         const paddingX = Math.max(24, Math.round(Math.min(sourceWidth * 0.16, 32) * upscale));
         const paddingY = Math.max(24, Math.round(Math.min(sourceHeight * 0.20, 24) * upscale));
+        const base = {
+          region,
+          scaleX: contentWidth / sourceWidth,
+          scaleY: contentHeight / sourceHeight,
+          cropWidth: contentWidth + paddingX * 2,
+          cropHeight: contentHeight + paddingY * 2,
+          offsetX: paddingX,
+          offsetY: paddingY,
+        };
         const variants = [colorCanvas, ocrCanvas];
-        let bestQuality = -Infinity;
-        let bestResult = null;
+        const crops = [];
         for (let variant = 0; variant < variants.length; variant++) {
           const crop = document.createElement("canvas");
-          crop.width = contentWidth + paddingX * 2;
-          crop.height = contentHeight + paddingY * 2;
+          crop.width = base.cropWidth;
+          crop.height = base.cropHeight;
           const context = crop.getContext("2d", { willReadFrequently: true });
           context.fillStyle = "#fff";
           context.fillRect(0, 0, crop.width, crop.height);
           context.imageSmoothingEnabled = true;
           context.drawImage(variants[variant], region.x0, region.y0, sourceWidth, sourceHeight,
             paddingX, paddingY, contentWidth, contentHeight);
-          setOcrStatus("正在识别深色选区：" + (index + 1) + "/" + regions.length + (variant ? "（增强图）…" : "（原图）…"));
-          const result = await worker.recognize(crop, {}, { blocks: true });
-          const words = flattenOcrWords(result.data);
-          const cropResult = {
-            region,
-            words,
-            scaleX: contentWidth / sourceWidth,
-            scaleY: contentHeight / sourceHeight,
-            cropWidth: crop.width,
-            cropHeight: crop.height,
-            offsetX: paddingX,
-            offsetY: paddingY,
-          };
-          const labelConfidence = MatchMonitorOCR.selectionLabelConfidence(words, crop.width, crop.height);
-          const wordConfidence = words.length
-            ? words.reduce((sum, word) => sum + Number(word.confidence ?? 0), 0) / words.length
-            : 0;
-          const quality = labelConfidence >= 0 ? 1000 + labelConfidence : wordConfidence;
-          if (!bestResult || quality > bestQuality) {
-            bestResult = cropResult;
+          crops.push(crop);
+        }
+
+        const labelWhitelist = "0123456789:.+OQZz胜平负其他主客";
+        const labelEnd = Math.min(base.cropHeight, paddingY + contentHeight * 0.72);
+        const oddsStart = Math.max(0, paddingY + contentHeight * 0.32);
+        const labelPasses = [];
+        const oddsPasses = [];
+        const candidates = [];
+
+        // Keep the original whole-cell read as a fallback, while separately
+        // reading the label and SP lines from both original and binarized pixels.
+        setOcrStatus("正在分行识别选区选项与SP：" + (index + 1) + "/" + regions.length + "…");
+        await worker.setParameters({ tessedit_pageseg_mode: psm.SINGLE_BLOCK || "6", tessedit_char_whitelist: selectionWhitelist });
+        const fullResult = await worker.recognize(crops[0], {}, { blocks: true });
+        candidates.push({ ...base, words: flattenOcrWords(fullResult.data), recognition: "whole-cell" });
+        for (const crop of crops) {
+          labelPasses.push(await recognizeBand(worker, crop, 0, labelEnd, psm.SINGLE_LINE || "7", labelWhitelist));
+          oddsPasses.push(await recognizeBand(worker, crop, oddsStart, base.cropHeight, psm.SINGLE_LINE || "7", oddsWhitelist));
+        }
+        // Pair the clearest label pass with each SP pass. This lets Chinese or
+        // score text and the smaller numeric odds use different preprocessing.
+        for (const labelWords of labelPasses) {
+          for (const oddsWords of oddsPasses) {
+            candidates.push({ ...base, words: [...labelWords, ...oddsWords], recognition: "split-label-and-odds" });
+          }
+        }
+        const marketHint = MatchMonitorOCR.marketAt((region.y0 + region.y1) / 2, pageWords, pageHeight);
+        let bestResult = candidates[0];
+        let bestQuality = -Infinity;
+        for (const candidate of candidates) {
+          const quality = MatchMonitorOCR.scoreSelectedCrop(candidate, pageWords, pageWidth, pageHeight, marketHint);
+          if (quality > bestQuality) {
+            bestResult = candidate;
             bestQuality = quality;
           }
         }
         // Keep one OCR record per dark selection even when neither crop variant
         // recognizes a supported label. The selection itself still creates a row.
-        cropResults[index] = bestResult || { region, words: [], scaleX: 1, scaleY: 1 };
+        cropResults[index] = bestResult || { ...base, words: [] };
       }
     } finally {
       await worker.setParameters({
