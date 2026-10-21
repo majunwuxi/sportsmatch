@@ -8,7 +8,8 @@ The dashboard is published as an owner-private ChatGPT Site. Its always-on sched
 
 ## Features
 
-- Search fixtures by date and team name using API-Football
+- Search fixtures by date and team name using API-Football; show the competition to distinguish youth and senior teams
+- Request and store fixture kickoff timestamps in `Asia/Shanghai`; display every kickoff with an explicit Beijing-time label
 - Create monitoring tasks with start time (Asia/Shanghai) and interval; multiple matches supported
 - Show upcoming tasks first in kickoff-time order; hide finished matches 24 hours after the backend first confirms their terminal result
 - Import/export ticket JSON; support `胜平负`, `让球胜平负`, 31 correct-score selections including `胜其他`, `平其他`, `负其他` and the equivalent `其它` spellings, `总进球`, and `半全场`

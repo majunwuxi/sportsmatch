@@ -49,7 +49,7 @@ def init_db():
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           fixture_id INTEGER NOT NULL UNIQUE,
           home TEXT NOT NULL, away TEXT NOT NULL,
-          kickoff TEXT, start_at TEXT NOT NULL,
+          league_name TEXT, kickoff TEXT, start_at TEXT NOT NULL,
           interval_minutes INTEGER NOT NULL,
           enabled INTEGER NOT NULL DEFAULT 1,
           status TEXT NOT NULL DEFAULT 'pending',
@@ -62,6 +62,8 @@ def init_db():
         );
         """)
         columns={r[1] for r in c.execute("PRAGMA table_info(tasks)")}
+        if "league_name" not in columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN league_name TEXT")
         if "listed_scores_json" not in columns:
             c.execute("ALTER TABLE tasks ADD COLUMN listed_scores_json TEXT")
         if "listed_scores_verified" not in columns:
@@ -224,8 +226,9 @@ def _tick(task):
     if should_send: notify(message)
     task_status="review_required" if status in VOID else "finished" if closed else "running"
     with conn() as c:
-        c.execute("UPDATE tasks SET last_score=?,settlement_score=?,half_score=?,provider_status=?,last_check=?,next_check=?,status=?,finished_at=CASE WHEN ?='finished' THEN COALESCE(finished_at,?) ELSE finished_at END,error=NULL WHERE id=? AND enabled=1 AND status IN ('pending','running')",
-             (score,regulation_score,f"{half_h}:{half_a}" if half_h is not None and half_a is not None else None,status,now.isoformat(),next_at,task_status,task_status,now.isoformat(),task["id"]))
+        league_name=(f.get("league") or {}).get("name")
+        c.execute("UPDATE tasks SET league_name=COALESCE(league_name,?),last_score=?,settlement_score=?,half_score=?,provider_status=?,last_check=?,next_check=?,status=?,finished_at=CASE WHEN ?='finished' THEN COALESCE(finished_at,?) ELSE finished_at END,error=NULL WHERE id=? AND enabled=1 AND status IN ('pending','running')",
+             (league_name,score,regulation_score,f"{half_h}:{half_a}" if half_h is not None and half_a is not None else None,status,now.isoformat(),next_at,task_status,task_status,now.isoformat(),task["id"]))
 
 def poll_loop():
     while not STOP.wait(5):
@@ -345,6 +348,7 @@ def fixtures(date:str=Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),q:str="",_:str=Depen
     matches=api("fixtures",{"date":date,"timezone":"Asia/Shanghai"})
     term=q.strip().casefold()
     return [{"id":x["fixture"]["id"],"home":x["teams"]["home"]["name"],"away":x["teams"]["away"]["name"],
+             "league_name":(x.get("league") or {}).get("name"),
              "kickoff":x["fixture"]["date"],"status":x["fixture"]["status"]["short"],"status_cn":STATUS_CN.get(x["fixture"]["status"]["short"],x["fixture"]["status"]["short"])}
              for x in matches if not term or term in x["teams"]["home"]["name"].casefold() or term in x["teams"]["away"]["name"].casefold()]
 
@@ -401,16 +405,17 @@ def create_task(data:TaskIn,_:str=Depends(auth)):
         if start.tzinfo is None:raise ValueError()
     except ValueError:raise HTTPException(422,"start_at must include timezone offset")
     # Confirm match identity from the provider; never trust just the browser's team names.
-    rows=api("fixtures",{"id":data.fixture_id})
+    rows=api("fixtures",{"id":data.fixture_id,"timezone":"Asia/Shanghai"})
     if len(rows)!=1:raise HTTPException(422,"Fixture not accessible")
     fixture=rows[0]
     home=fixture["teams"]["home"]["name"];away=fixture["teams"]["away"]["name"]
+    league_name=(fixture.get("league") or {}).get("name")
     now=datetime.now(timezone.utc).isoformat()
     next_at=max(start.astimezone(timezone.utc).isoformat(),now)
     with conn() as c:
         try:
-            cur=c.execute("""INSERT INTO tasks(fixture_id,home,away,kickoff,start_at,interval_minutes,next_check,ticket_json,listed_scores_json,listed_scores_verified,created_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?)""",(data.fixture_id,home,away,fixture["fixture"]["date"],start.isoformat(),data.interval_minutes,next_at,json.dumps(tickets,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(data.listed_scores_verified),now))
+            cur=c.execute("""INSERT INTO tasks(fixture_id,home,away,league_name,kickoff,start_at,interval_minutes,next_check,ticket_json,listed_scores_json,listed_scores_verified,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",(data.fixture_id,home,away,league_name,fixture["fixture"]["date"],start.isoformat(),data.interval_minutes,next_at,json.dumps(tickets,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(data.listed_scores_verified),now))
         except sqlite3.IntegrityError:raise HTTPException(409,"Fixture already monitored")
     return {"id":cur.lastrowid,"home":home,"away":away}
 

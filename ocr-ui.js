@@ -287,6 +287,7 @@
       fixture_id: selected?.id ?? null,
       home: selected?.home ?? null,
       away: selected?.away ?? null,
+      league_name: selected?.league_name ?? null,
       kickoff: selected?.kickoff ?? null,
       screenshot_ocr: "browser_local_reviewed",
       budget: total,
@@ -862,7 +863,7 @@
     try {
       const payload = buildOcrPayload();
       $("tickets").value = JSON.stringify(payload, null, 2);
-      if (payload.fixture_id) $("selected").textContent = payload.home + " vs " + payload.away + " · ID " + payload.fixture_id;
+      if (payload.fixture_id) $("selected").textContent = payload.home + " vs " + payload.away + " · " + leagueLabel(payload.league_name) + " · 北京时间 " + formatKickoffBeijing(payload.kickoff) + " · ID " + payload.fixture_id;
       $("tickets").scrollIntoView({ behavior: "smooth", block: "center" });
       $("createError").textContent = "投注 JSON 已填入。请确认比赛、开始时间和监测间隔。";
     } catch (error) { setOcrStatus(error.message, true); }

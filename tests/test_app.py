@@ -18,7 +18,7 @@ def client():
     with TestClient(m.app) as c: yield c
 
 def fixture(status='NS',home=0,away=0):
-    return {'fixture':{'id':12,'date':'2026-10-21T12:00:00Z','status':{'short':status}},'teams':{'home':{'name':'A'},'away':{'name':'B'}},'goals':{'home':home,'away':away},'score':{'fulltime':{'home':1,'away':0},'halftime':{'home':1,'away':0}}}
+    return {'fixture':{'id':12,'date':'2026-10-21T12:00:00Z','status':{'short':status}},'teams':{'home':{'name':'A'},'away':{'name':'B'}},'league':{'name':'UEFA Youth League','country':'Europe','season':2026,'round':'League Phase'},'goals':{'home':home,'away':away},'score':{'fulltime':{'home':1,'away':0},'halftime':{'home':1,'away':0}}}
 
 def create(client,monkeypatch,start=None):
     monkeypatch.setattr(m,'api',lambda *a:[fixture()])
@@ -66,6 +66,38 @@ def test_task_persists_screenshot_sp_list_and_requires_confirmation(client,monke
     body['listed_scores_verified']=False
     body['fixture_id']=13
     assert client.post('/api/tasks',auth=('test','test-password'),json=body).status_code==422
+
+def test_fixture_search_returns_competition_and_requests_beijing_timezone(client,monkeypatch):
+    calls=[]
+    monkeypatch.setattr(m,'api',lambda endpoint,params:(calls.append((endpoint,params)) or [fixture()]))
+    response=client.get('/api/fixtures?date=2026-10-21',auth=('test','test-password'))
+    assert response.status_code==200
+    assert calls==[('fixtures',{'date':'2026-10-21','timezone':'Asia/Shanghai'})]
+    assert response.json()[0]['league_name']=='UEFA Youth League'
+    assert response.json()[0]['kickoff']=='2026-10-21T12:00:00Z'
+
+def test_task_stores_competition_and_requests_beijing_local_kickoff(client,monkeypatch):
+    provider=fixture()
+    provider['fixture']['date']='2026-10-21T19:00:00+08:00'
+    calls=[]
+    monkeypatch.setattr(m,'api',lambda endpoint,params:(calls.append((endpoint,params)) or [provider]))
+    response=client.post('/api/tasks',auth=('test','test-password'),json={'fixture_id':12,'home':'spoof','away':'spoof','start_at':datetime.now(timezone.utc).isoformat(),'interval_minutes':5,'tickets':[]})
+    assert response.status_code==200
+    assert calls==[('fixtures',{'id':12,'timezone':'Asia/Shanghai'})]
+    row=client.get('/api/tasks',auth=('test','test-password')).json()[0]
+    assert row['league_name']=='UEFA Youth League'
+    assert row['kickoff']=='2026-10-21T19:00:00+08:00'
+
+def test_poll_backfills_competition_for_existing_tasks(client,monkeypatch):
+    create(client,monkeypatch)
+    row=client.get('/api/tasks',auth=('test','test-password')).json()[0]
+    with m.conn() as c:
+        c.execute("UPDATE tasks SET league_name=NULL,next_check=? WHERE id=?",((datetime.now(timezone.utc)-timedelta(minutes=1)).isoformat(),row['id']))
+    row['league_name']=None
+    monkeypatch.setattr(m,'notify',lambda *_:None)
+    m.tick(row)
+    refreshed=client.get('/api/tasks',auth=('test','test-password')).json()[0]
+    assert refreshed['league_name']=='UEFA Youth League'
 
 def test_listed_score_validation_rejects_non_exact_options():
     with pytest.raises(m.HTTPException) as error:
@@ -303,13 +335,13 @@ def test_existing_database_migration_preserves_tasks_and_tickets(monkeypatch,tmp
         columns={r[1] for r in c.execute('PRAGMA table_info(tasks)')}
     assert tuple(row[i] for i in range(3))==('3:0','3:0','[{"selection":"3:0","stake":2,"odds":5}]')
     assert row['finished_at']=='2026-10-21T01:00:00+00:00'
-    assert {'settlement_score','half_score','provider_status','finished_at'}<=columns
+    assert {'settlement_score','half_score','provider_status','finished_at','league_name'}<=columns
 
 def test_index_contains_simulator_and_no_old_score_calculator():
     html=(m.Path(__file__).parents[1]/'index.html').read_text(encoding='utf-8')
     assert '竞彩足球比分投注模拟器' in html
     assert 'class="dashboard-layout"' in html and 'class="dashboard-left"' in html
-    assert 'id="monitorTasks"' in html and 'class="simulator-card"' in html
+    assert 'id="monitorTasks"' in html and 'class="card simulator-card"' in html
     assert 'class="section-divider"' in html
     assert '.dashboard-layout{display:grid' in html and '@media(max-width:900px)' in html
     assert html.index('<h2>查找比赛</h2>') < html.index('<h2>创建监测任务</h2>') < html.index('<h2>监测任务</h2>') < html.index('class="section-divider"') < html.index('竞彩足球比分投注模拟器')
@@ -321,6 +353,7 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert 'id="exportOcrJson"' in html and 'id="applyOcrJson"' in html
     assert 'id="scheduleDialog"' in html and 'id="scheduleStart"' in html
     assert 'id="scheduleInterval"' in html and 'id="saveSchedule"' in html
+    assert 'leagueLabel' in html and 'UEFA Youth League' in html and '赛事：' in html
     assert '调整计划' in html and 'textContent="删除"' in html
     assert 'method:"DELETE"' in html and '"/schedule"' in html
     assert '请选择项目、核对SP并分配金额。' in html
