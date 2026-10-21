@@ -249,11 +249,16 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert 'betScreenshot' in html and 'ocrConfirm' in html and '/ocr-parser.js' in html and '/ocr-ui.js' in html
     assert 'id="simulatorManual" hidden' in html and 'id="manualMode"' in html
     assert 'id="ocrBudget"' in html and 'ocr-balance-row' in html
+    assert 'id="ocrSelectedCount"' in html and 'id="ocrSelectedTotal"' in html
+    assert 'id="exportOcrJson"' in html and 'id="applyOcrJson"' in html
     assert '请选择项目、核对SP并分配金额。' in html
     assert 'expandedBetTaskIds' in html and '展开投注' in html and 'aria-expanded' in html
     assert 'const finished=t.status==="finished"' in html and 'b.disabled=finished' in html
     ui=(m.Path(__file__).parents[1]/'ocr-ui.js').read_text(encoding='utf-8')
     assert 'Number($("ocrBudget").value)' in ui and 'hasRecognizedSelections' in ui
+    assert '$("ocrSelectedTotal").textContent = money(total)' in ui
+    assert '$("exportOcrJson").onclick' in ui and 'const payload = buildOcrPayload()' in ui
+    assert '$("tickets").value = JSON.stringify(payload, null, 2)' in ui
     assert '网易投注助手比赛链接' not in html and 'bettingLink' not in html and 'netease_betting_assistant_url' not in html
     assert '竞彩单场比分计算' not in html
     assert 'MARKETS={correct_score:"比分"' in html and '半全场' in html

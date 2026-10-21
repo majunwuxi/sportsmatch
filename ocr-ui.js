@@ -205,6 +205,8 @@
     const valid = picks.filter((pick) => validateRow(pick).ok && Number(pick.stake) >= 2);
     const minimum = valid.length ? Math.min(...valid.map((pick) => Number(pick.stake) * Number(pick.odds) - total)) : null;
     const highlighted = parsedPicks.filter((pick) => pick.highlighted).length;
+    $("ocrSelectedCount").textContent = "已选 " + picks.length + " 项";
+    $("ocrSelectedTotal").textContent = money(total);
     $("ocrCount").textContent = "候选 " + parsedPicks.length + " 项 · 深色选区 " + selectionRegionCount + " 块 · 按选区建单 " + highlighted + " 项 · 当前勾选 " + picks.length + " 项 · 投入 " + money(total);
     $("ocrProfit").textContent = minimum === null
       ? "尚无已勾选的投注项。"
@@ -282,6 +284,8 @@
     $("ocrReview").hidden = true;
     $("simulatorManual").hidden = true;
     $("ocrRows").replaceChildren();
+    $("ocrSelectedCount").textContent = "已选 0 项";
+    $("ocrSelectedTotal").textContent = money(0);
     $("listedScores").value = "";
     $("toggleOcrCandidates").hidden = true;
     setOcrStatus("图片仅在本机浏览器识别，不会上传到 Match Monitor 后台。请上传投注页面截图。" );
@@ -784,6 +788,27 @@
   $("balanceOcr").onclick = () => {
     try { balanceOcrPicks(); }
     catch (error) { setOcrStatus(error.message, true); }
+  };
+  $("exportOcrJson").onclick = () => {
+    try {
+      const payload = buildOcrPayload();
+      const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "match-monitor-bets.json";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setOcrStatus("已导出所选投注 JSON，可在创建监测任务时直接粘贴文件内容。请再次核对投注项和SP。" );
+    } catch (error) { setOcrStatus(error.message, true); }
+  };
+  $("applyOcrJson").onclick = () => {
+    try {
+      const payload = buildOcrPayload();
+      $("tickets").value = JSON.stringify(payload, null, 2);
+      if (payload.fixture_id) $("selected").textContent = payload.home + " vs " + payload.away + " · ID " + payload.fixture_id;
+      $("tickets").scrollIntoView({ behavior: "smooth", block: "center" });
+      $("createError").textContent = "投注 JSON 已填入。请确认比赛、开始时间和监测间隔。";
+    } catch (error) { setOcrStatus(error.message, true); }
   };
 
   const manualPayload = buildPayload;

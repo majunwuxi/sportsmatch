@@ -16,7 +16,7 @@ The browser cannot supply upstream credentials or a target URL. The proxy only a
 ## Current status
 
 Site project: `appgprj_6ad718b88cd8819195c1d2b1773221ad`.
-Owner-private URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site . Version 21, deployed 2026-10-21, adds collapsible task bet details, disables controls on finished tasks, and refines the screenshot simulator layout.
+Owner-private URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site . Version 22, deployed 2026-10-21, adds a live selected-ticket count and stake total to the OCR candidate area, plus validated JSON download and direct fill into the task betting field. Site source commit: `11e7e4d78403270408ad102610ea863e5077c5ea`.
 
 The OCR grid-recovery pipeline fits the standard 28-cell correct-score table from recognized score labels, reads each SP from a separate enlarged cell crop, removes colored change-arrow pixels, and normalizes white-on-dark selected cells. If an SP still cannot be read, its inferred score remains as an editable blank candidate instead of disappearing. Page-level and cell-level odds are reconciled by confidence, with decimal readings preferred when the digits otherwise match. It requires a user confirmation when settling “胜其它／负其它”. The Site checks `/api/health` for `screenshot_score_lists` support before creating such a task, so the backend must be upgraded from the matching GitHub commit and only `sportsmatch-web.service` restarted first. No real API-Football result transition or Telegram message was triggered during this update.
 

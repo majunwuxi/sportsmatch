@@ -149,3 +149,12 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Verification: combined OCR parser and Sites Worker suite `39 passed` (22 parser, 17 Worker); JavaScript syntax checks, Python compile, Worker build, ESM artifact validation, and `git diff --check` passed. The Python `pytest` package is unavailable in this environment; no backend Python behavior changed.
 - Owner-private ChatGPT Site version 21 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site. Site source commit: `75c595a28b28192a973b83e4b114fa16a60e28dd`.
 - The custom-domain server was not accessed. To update its copy of the page, deploy the GitHub commit and restart only `sportsmatch-web.service`; `napoli-monitor.service` was not accessed or changed. No betting screenshot, API key, Telegram token, or server credential was committed.
+
+## 2026-10-21 — OCR candidate total and JSON export
+
+- The recognized-candidate panel now shows the selected ticket count and a prominent selected-stake total. It updates when a candidate is selected, deselected, or its stake changes, and resets when the screenshot is cleared.
+- Added “下载所选 JSON” and “填入监测任务” actions next to the existing manual confirmation. Both use the same reviewed schema-v2 payload and validation: each selected stake and SP must be valid, and a confirmed full exact-score SP list is required when “胜其它／负其它” is selected. The generated `tickets`, `budget`, fixture metadata, and screenshot score list match the task import format.
+- The Sites Worker source was regenerated from the canonical dashboard and OCR files; JavaScript syntax validation caught and removed a stale non-JavaScript output prefix in the generated worker.
+- Verification: Node OCR parser and Sites Worker tests `39/39`; Python compile, JavaScript syntax checks, regenerated Worker syntax check, and `git diff --check` passed. The Python `pytest` suite could not run because `pytest` is not installed in this environment. No API, server, key, or screenshot was used.
+- Owner-private ChatGPT Site version 22 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site; Site source commit: `11e7e4d78403270408ad102610ea863e5077c5ea`. Access remains owner-only.
+- The custom-domain server was not accessed. After the GitHub update, deploy on amstd by pulling the commit and restarting only `sportsmatch-web.service`; `napoli-monitor.service` must remain untouched. No screenshot, private betting record, API-Football key, Telegram token, or server credential was committed.
