@@ -348,10 +348,25 @@ def health(_:str=Depends(auth)):
 def fixtures(date:str=Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),q:str="",_:str=Depends(auth)):
     matches=api("fixtures",{"date":date,"timezone":"Asia/Shanghai"})
     term=q.strip().casefold()
+    search_terms=[term] if term else []
+    if term:
+        directory=team_directory_by_id()
+        exact_zh={team.get("name_en","").casefold() for team in directory.values()
+                  if team.get("name_zh","").strip().casefold()==term and team.get("name_en")}
+        if exact_zh:
+            search_terms=sorted(exact_zh)
+        elif len(term)>=2:
+            partial_zh={team.get("name_en","").casefold() for team in directory.values()
+                        if term in team.get("name_zh","").strip().casefold() and team.get("name_en")}
+            if partial_zh:
+                search_terms=sorted(partial_zh)
+    def team_matches(name):
+        name=(name or "").casefold()
+        return not search_terms or any(search_term in name for search_term in search_terms)
     return [{"id":x["fixture"]["id"],"home":x["teams"]["home"]["name"],"away":x["teams"]["away"]["name"],
              "league_name":(x.get("league") or {}).get("name"),
              "kickoff":x["fixture"]["date"],"status":x["fixture"]["status"]["short"],"status_cn":STATUS_CN.get(x["fixture"]["status"]["short"],x["fixture"]["status"]["short"])}
-             for x in matches if not term or term in x["teams"]["home"]["name"].casefold() or term in x["teams"]["away"]["name"].casefold()]
+             for x in matches if team_matches(x["teams"]["home"]["name"]) or team_matches(x["teams"]["away"]["name"])]
 
 def _utc_datetime(value):
     try:

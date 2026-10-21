@@ -76,6 +76,26 @@ def test_fixture_search_returns_competition_and_requests_beijing_timezone(client
     assert response.json()[0]['league_name']=='UEFA Youth League'
     assert response.json()[0]['kickoff']=='2026-10-21T12:00:00Z'
 
+@pytest.mark.parametrize('query,expected_team', [('曼城','Manchester City'),('Manchester City','Manchester City'),('利物浦','Liverpool'),('利物','Liverpool')])
+def test_fixture_search_accepts_chinese_team_names(client,monkeypatch,query,expected_team):
+    city=fixture();city['fixture']['id']=50;city['teams']['home']['name']='Manchester City'
+    liverpool=fixture();liverpool['fixture']['id']=40;liverpool['teams']['away']['name']='Liverpool'
+    arsenal=fixture();arsenal['fixture']['id']=42;arsenal['teams']['home']['name']='Arsenal'
+    monkeypatch.setattr(m,'api',lambda *_:[city,liverpool,arsenal])
+    response=client.get('/api/fixtures',params={'date':'2026-10-21','q':query},auth=('test','test-password'))
+    assert response.status_code==200
+    assert len(response.json())==1
+    assert expected_team in (response.json()[0]['home'],response.json()[0]['away'])
+
+def test_fixture_search_chinese_partial_name_matches_multiple_teams(client,monkeypatch):
+    milan=fixture();milan['fixture']['id']=489;milan['teams']['home']['name']='AC Milan'
+    inter=fixture();inter['fixture']['id']=505;inter['teams']['away']['name']='Inter'
+    arsenal=fixture();arsenal['fixture']['id']=42;arsenal['teams']['home']['name']='Arsenal'
+    monkeypatch.setattr(m,'api',lambda *_:[milan,inter,arsenal])
+    response=client.get('/api/fixtures',params={'date':'2026-10-21','q':'米兰'},auth=('test','test-password'))
+    assert response.status_code==200
+    assert {row['id'] for row in response.json()}=={489,505}
+
 def test_task_stores_competition_and_requests_beijing_local_kickoff(client,monkeypatch):
     provider=fixture()
     provider['fixture']['date']='2026-10-21T19:00:00+08:00'

@@ -49,3 +49,20 @@ test('team logo proxy delegates allowlisted PNGs to the authenticated backend',a
 test('ticket plan PNG draws both team logos from the team directory',async()=>{const html=await (await worker.fetch(req('/'),{})).text();const mapText=await (await worker.fetch(req('/teams-map.js'),{})).text(),mapContext={};vm.runInNewContext(mapText,mapContext);const aliasesStart=html.indexOf('const MARKET_NAMES_EN='),aliasesEnd=html.indexOf('const local=',aliasesStart),dataStart=html.indexOf('function ticketImageData',aliasesEnd),imageEnd=html.indexOf('function signedProfit',dataStart);assert.ok(aliasesStart>=0&&aliasesEnd>aliasesStart&&dataStart>aliasesEnd&&imageEnd>dataStart);const images=[],gradient={addColorStop(){}},ctx={beginPath(){},moveTo(){},arcTo(){},closePath(){},fill(){},fillRect(){},createLinearGradient(){return gradient},fillText(){},drawImage(image){images.push(image.src)}};const canvas={getContext(){return ctx},toBlob(callback){callback({type:'image/png'})}},link={click(){},remove(){}};class MockImage{set src(value){this._src=value;this.complete=true;this.naturalWidth=64;this.naturalHeight=64;this.onload?.()}get src(){return this._src}}const runtime={MatchMonitorTeamDirectory:mapContext.MatchMonitorTeamDirectory,Image:MockImage,MARKETS:{correct_score:'比分',match_result:'胜平负',handicap:'让球胜平负',total_goals:'总进球',half_full:'半全场'},document:{createElement(tag){return tag==='canvas'?canvas:link},body:{append(){}}},URL:{createObjectURL(){return 'blob:ticket-image'},revokeObjectURL(){}},money:value=>'¥'+Number(value||0).toFixed(2),setTimeout(){return 1},clearTimeout(){}};const code=html.slice(aliasesStart,aliasesEnd)+html.slice(dataStart,imageEnd)+'\nglobalThis.createTicketPlanImage=createTicketPlanImage;';vm.runInNewContext(code,runtime);await runtime.createTicketPlanImage({home:'Club Brugge KV',away:'Lens',league_name:'UEFA Champions League',kickoff:'2026-10-21T13:00:00Z'},{tickets:[{market:'correct_score',selection:'2:1',stake:20,odds:2.5}]});assert.deepEqual(images.sort(),['/team-logo/116.png','/team-logo/569.png'])});
 
 test('brand logo is served once as a compact WebP asset',async()=>{assert.equal(source.split("if(url.pathname==='/brand-logo.webp'){").length-1,1);const html=await (await worker.fetch(req('/'),{})).text();assert.match(html,/<img class="brand-logo" src="\/brand-logo\.webp" alt="Match Monitor 足球比赛投注监测"/);const r=await worker.fetch(req('/brand-logo.webp'),{});assert.equal(r.status,200);assert.equal(r.headers.get('content-type'),'image/webp');assert.equal(r.headers.get('cache-control'),'public, max-age=604800');const bytes=new Uint8Array(await r.arrayBuffer());assert.equal(String.fromCharCode(...bytes.slice(0,4)),'RIFF');assert.equal(String.fromCharCode(...bytes.slice(8,12)),'WEBP');assert.ok(bytes.length>100000&&bytes.length<300000)});
+
+test('fixture search resolves Chinese team names through the bundled directory',async()=>{
+ const html=await (await worker.fetch(req('/'),{})).text();
+ assert.match(html,/支持中文名和 API-Football 英文名/);
+ assert.match(html,/resolveFixtureTeamSearch\(\$\("search"\)\.value\)/);
+ const mapText=await (await worker.fetch(req('/teams-map.js'),{})).text(),mapContext={};
+ vm.runInNewContext(mapText,mapContext);
+ const definition=html.match(/function resolveFixtureTeamSearch\(value\)\{[^\n]+\}/)?.[0];
+ assert.ok(definition,'Chinese team search resolver is present in the served page');
+ const resolve=vm.runInNewContext(`(${definition})`,{TEAM_DIRECTORY:mapContext.MatchMonitorTeamDirectory});
+ assert.equal(resolve('曼城').query,'Manchester City');
+ assert.equal(resolve('利物浦').query,'Liverpool');
+ assert.equal(resolve('Manchester City').query,'Manchester City');
+ const partial=resolve('米兰');
+ assert.equal(partial.query,'');
+ assert.ok(partial.filterNames?.includes('AC Milan'));
+});
