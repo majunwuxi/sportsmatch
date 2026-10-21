@@ -180,3 +180,5 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 
 - Finished task cards now receive a pale yellow background with a light gold border and rounded inset spacing. The style is applied by task status; active tasks keep their existing appearance and finished-task controls remain disabled.
 - Verification: Node OCR parser and Sites Worker tests `42/42`, including assertions for status-driven styling and disabled actions. JavaScript syntax checks, Python compile, and `git diff --check` passed. The targeted Python test could not run because `pytest` is not installed.
+- Owner-only ChatGPT Site version 25 deployed successfully at https://bm.sendmymail.top and https://wellmax-match-monitor.letnek-majun.chatgpt.site. The custom domain and TLS are active; the allowlist contains only the owner. Site source commit: `f64dabf297bb942dfba193c3ffc31b9d9d55618a`.
+- The separate amstd deployment at `sportsmatch.sendmymail.top` was not remotely updated. No screenshot, API key, Telegram token, betting data, or server credential was committed or used.
