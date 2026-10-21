@@ -171,7 +171,9 @@
       resultCell.className = state.ok ? "good" : "bad";
 
       const confidenceCell = document.createElement("td");
-      confidenceCell.textContent = (pick.highlighted ? "识别到选中底色 · " : "待勾选 · ") + "OCR " + pick.confidence + "%";
+      confidenceCell.textContent = pick.unrecognized
+        ? "已按深色选区建行 · 请手动校对"
+        : (pick.highlighted ? "选区内容识别 · " : "待勾选 · ") + "OCR " + pick.confidence + "%";
       if (pick.needsReview) confidenceCell.classList.add("bad");
       tr.append(checkCell, marketCell, selectionCell, handicapCell, oddsCell, stakeCell, resultCell, confidenceCell);
       body.append(tr);
@@ -201,7 +203,7 @@
     const valid = picks.filter((pick) => validateRow(pick).ok && Number(pick.stake) >= 2);
     const minimum = valid.length ? Math.min(...valid.map((pick) => Number(pick.stake) * Number(pick.odds) - total)) : null;
     const highlighted = parsedPicks.filter((pick) => pick.highlighted).length;
-    $("ocrCount").textContent = "候选 " + parsedPicks.length + " 项 · 深色选区 " + selectionRegionCount + " 块 · 已匹配 " + highlighted + " 项 · 当前勾选 " + picks.length + " 项 · 投入 " + money(total);
+    $("ocrCount").textContent = "候选 " + parsedPicks.length + " 项 · 深色选区 " + selectionRegionCount + " 块 · 按选区建单 " + highlighted + " 项 · 当前勾选 " + picks.length + " 项 · 投入 " + money(total);
     $("ocrProfit").textContent = minimum === null
       ? "请选择项目、核对SP并分配金额。"
       : "单项命中时净利润区间：" + money(minimum) + " 至 " + money(Math.max(...valid.map((pick) => Number(pick.stake) * Number(pick.odds) - total))) + "。跨玩法同时命中时返奖会叠加。";
@@ -321,7 +323,8 @@
         const paddingX = Math.max(24, Math.round(Math.min(sourceWidth * 0.16, 32) * upscale));
         const paddingY = Math.max(24, Math.round(Math.min(sourceHeight * 0.20, 24) * upscale));
         const variants = [colorCanvas, ocrCanvas];
-        let bestLabelConfidence = -1;
+        let bestQuality = -Infinity;
+        let bestResult = null;
         for (let variant = 0; variant < variants.length; variant++) {
           const crop = document.createElement("canvas");
           crop.width = contentWidth + paddingX * 2;
@@ -346,11 +349,18 @@
             offsetY: paddingY,
           };
           const labelConfidence = MatchMonitorOCR.selectionLabelConfidence(words, crop.width, crop.height);
-          if (labelConfidence > bestLabelConfidence) {
-            cropResults[index] = cropResult;
-            bestLabelConfidence = labelConfidence;
+          const wordConfidence = words.length
+            ? words.reduce((sum, word) => sum + Number(word.confidence ?? 0), 0) / words.length
+            : 0;
+          const quality = labelConfidence >= 0 ? 1000 + labelConfidence : wordConfidence;
+          if (!bestResult || quality > bestQuality) {
+            bestResult = cropResult;
+            bestQuality = quality;
           }
         }
+        // Keep one OCR record per dark selection even when neither crop variant
+        // recognizes a supported label. The selection itself still creates a row.
+        cropResults[index] = bestResult || { region, words: [], scaleX: 1, scaleY: 1 };
       }
     } finally {
       await worker.setParameters({
@@ -358,7 +368,7 @@
         tessedit_char_whitelist: "",
       });
     }
-    return cropResults.filter(Boolean);
+    return cropResults;
   }
 
   async function imageCanvases(file) {
@@ -425,7 +435,15 @@
         const pageWords = flattenOcrWords(result.data);
         const cropResults = await recognizeSelectedRegions(worker, canvases.color, canvases.ocr, selectionRegions);
         const enhancedWords = MatchMonitorOCR.mergeSelectedRegionWords(pageWords, cropResults);
-        parsedPicks = MatchMonitorOCR.parse(enhancedWords, canvases.width, canvases.height, (bbox) => MatchMonitorOCR.containsSelectedRegion(bbox, selectionRegions))
+        const pageCandidates = MatchMonitorOCR.parse(enhancedWords, canvases.width, canvases.height,
+          (bbox) => MatchMonitorOCR.containsSelectedRegion(bbox, selectionRegions));
+        const selectedRows = MatchMonitorOCR.parseSelectedRegions(cropResults, pageWords, canvases.width, canvases.height);
+        const selectedFingerprints = new Set(selectedRows.filter((row) => row.selection)
+          .map((row) => [row.market, row.handicap, row.selection, row.odds].join("|")));
+        const otherCandidates = pageCandidates.filter((row) => !row.highlighted
+          && !selectedFingerprints.has([row.market, row.handicap, row.selection, row.odds].join("|")));
+        parsedPicks = [...otherCandidates, ...selectedRows]
+          .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x)
           .map((row) => ({ ...row, enabled: row.highlighted, stake: 0 }));
       } finally {
         await worker.terminate();
@@ -439,12 +457,13 @@
       }
       $("simulatorManual").hidden = false;
       const highlighted = parsedPicks.filter((row) => row.highlighted).length;
+      const recognizedLabels = parsedPicks.filter((row) => row.highlighted && row.selection && !row.unrecognized).length;
+      const recognizedOdds = parsedPicks.filter((row) => row.highlighted && row.odds !== null).length;
       setOcrStatus(parsedPicks.length
         ? highlighted
-          ? "识别出 " + parsedPicks.length + " 个候选项，检测到 " + selectionRegionCount + " 块深色选区并匹配到 " + highlighted + " 项；当前仅预选匹配项目。其他候选项可展开查看。"
-            + (highlighted < selectionRegionCount ? "选区与识别项数量不一致，请展开候选项检查是否漏项。" : "请核对文字与SP。")
+          ? "识别出 " + parsedPicks.length + " 个候选项，检测到 " + selectionRegionCount + " 块深色选区，并按选区建立 " + highlighted + " 条投注项（选项识别 " + recognizedLabels + "/" + selectionRegionCount + "，SP识别 " + recognizedOdds + "/" + selectionRegionCount + "）。每块选区都有对应行；请核对未识别或低置信度的文字与SP。其他候选项可展开查看。"
           : selectionRegionCount
-            ? "检测到 " + selectionRegionCount + " 块深色选区，但暂未匹配到投注项。可展开候选项手动补选，或换一张清晰截图重试。"
+            ? "检测到 " + selectionRegionCount + " 块深色选区，但未能建立选区记录。请重试或手动填写。"
             : "识别到 " + parsedPicks.length + " 个候选项，但没有检测到深色底选项，因此没有自动勾选。可展开全部候选项手动选择，或换一张清晰截图重试。"
         : "没有识别到可用投注项。请换一张包含玩法标题、选项和SP的清晰截图，或手动填写模拟器。", !parsedPicks.length);
     } catch (error) {

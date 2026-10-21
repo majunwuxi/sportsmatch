@@ -163,13 +163,13 @@
     return null;
   }
 
-  function parse(words, width, height, isHighlighted = () => false) {
+  function parse(words, width, height, isHighlighted = () => false, forcedMarket = null) {
     const validWords = (words || []).filter((word) => normalize(word.text) && Number(word.confidence ?? 100) >= 20 && getBox(word).right > getBox(word).left);
     const lines = groupLines(validWords, height);
     const headings = makeHeadings(lines);
     const tokens = mergeFragments(lines, width);
     const candidates = tokens.flatMap((word) => {
-      const market = sectionAt(getBox(word).cy, headings, height);
+      const market = forcedMarket || sectionAt(getBox(word).cy, headings, height);
       const classified = classify(word, market, validWords, height);
       return classified ? [{ word, classified, market }] : [];
     });
@@ -342,6 +342,93 @@
     return best;
   }
 
+  function parseSelectedRegions(cropResults, pageWords, width, height) {
+    const validPageWords = (pageWords || []).filter((word) => normalize(word.text)
+      && Number(word.confidence ?? 100) >= 20 && getBox(word).right > getBox(word).left);
+    const pageHeadings = makeHeadings(groupLines(validPageWords, height));
+
+    return (cropResults || []).map((item, index) => {
+      const region = item?.region || { x0: 0, y0: 0, x1: 0, y1: 0 };
+      const regionWidth = Math.max(1, region.x1 - region.x0);
+      const regionHeight = Math.max(1, region.y1 - region.y0);
+      const scaleX = Number(item?.scaleX) > 0 ? Number(item.scaleX) : 1;
+      const scaleY = Number(item?.scaleY) > 0 ? Number(item.scaleY) : 1;
+      const cropWidth = Number(item?.cropWidth) || regionWidth * scaleX;
+      const cropHeight = Number(item?.cropHeight) || regionHeight * scaleY;
+      const offsetX = Number(item?.offsetX) || 0;
+      const offsetY = Number(item?.offsetY) || 0;
+      const cropWords = (item?.words || []).filter((word) => normalize(word.text)
+        && Number(word.confidence ?? 100) >= 20 && getBox(word).right > getBox(word).left);
+      const cropTokens = mergeFragments(groupLines(cropWords, cropHeight), cropWidth);
+      const mappedTokens = cropTokens.map((word) => {
+        const box = getBox(word);
+        const repairedScore = box.cy <= cropHeight * 0.58 ? repairSelectedScoreLabel(word.text) : null;
+        return {
+          ...word,
+          text: repairedScore || word.text,
+          bbox: {
+            x0: region.x0 + (box.left - offsetX) / scaleX,
+            y0: region.y0 + (box.top - offsetY) / scaleY,
+            x1: region.x0 + (box.right - offsetX) / scaleX,
+            y1: region.y0 + (box.bottom - offsetY) / scaleY,
+          },
+        };
+      });
+
+      const contextualMarket = sectionAt(region.y0 + regionHeight / 2, pageHeadings, height);
+      const inferredMarket = contextualMarket || inferSelectedMarket(mappedTokens, width, height);
+      const cropRows = inferredMarket
+        ? parse(mappedTokens, width, height, () => true, inferredMarket)
+        : [];
+      const localPageRows = validPageWords.length
+        ? parse(validPageWords, width, height,
+          (bbox) => containsSelectedRegion(bbox, [region]), inferredMarket)
+          .filter((row) => row.highlighted)
+        : [];
+
+      const bestCropRow = cropRows[0] || null;
+      const bestPageRow = localPageRows[0] || null;
+      // The crop is preferred when it supplies an option and SP; otherwise use
+      // the existing full-page OCR only from inside this exact dark region.
+      const row = bestCropRow && !bestCropRow.needsReview ? bestCropRow
+        : bestPageRow && !bestPageRow.needsReview ? bestPageRow
+          : bestCropRow || bestPageRow;
+      if (row) {
+        return { ...row, highlighted: true, selectedRegion: index, unrecognized: false };
+      }
+
+      const rawLabel = cropTokens.find((word) => getBox(word).cy <= cropHeight * 0.7
+        && !numericOdds(word)) || cropTokens[0];
+      const rawText = normalize(rawLabel?.text || "");
+      const rawScore = rawLabel && getBox(rawLabel).cy <= cropHeight * 0.7
+        ? repairSelectedScoreLabel(rawLabel.text) : null;
+      const confidence = Math.round(Number(rawLabel?.confidence ?? 0));
+      return {
+        market: inferredMarket || "correct_score",
+        selection: rawScore || rawText,
+        handicap: null,
+        odds: null,
+        confidence,
+        highlighted: true,
+        needsReview: true,
+        unrecognized: true,
+        selectedRegion: index,
+        position: { x: Math.round(region.x0 + regionWidth / 2), y: Math.round(region.y0 + regionHeight / 2) },
+      };
+    });
+  }
+
+  function inferSelectedMarket(words, width, height) {
+    const tokens = mergeFragments(groupLines(words || [], height), width);
+    for (const word of tokens) {
+      const text = normalize(word.text);
+      if (scoreOptions.has(text) || repairSelectedScoreLabel(text)) return "correct_score";
+      if (halfFullOptions.has(text)) return "half_full";
+    }
+    if (tokens.some((word) => ["主胜", "客胜", "胜", "平", "负"].includes(normalize(word.text)))) return "match_result";
+    return null;
+  }
+
   function mergeSelectedRegionWords(pageWords, cropResults) {
     const replacements = (cropResults || []).filter((item) => {
       if (!item?.region || !Array.isArray(item.words) || !item.words.length) return false;
@@ -388,5 +475,5 @@
     return data;
   }
 
-  root.MatchMonitorOCR = { parse, validatePick, normalize, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels };
+  root.MatchMonitorOCR = { parse, parseSelectedRegions, validatePick, normalize, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels };
 })(globalThis);

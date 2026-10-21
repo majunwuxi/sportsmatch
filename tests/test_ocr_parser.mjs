@@ -163,6 +163,44 @@ test('matches every detected selection when a score label is OCR-split and an ot
     JSON.stringify(synthetic.map(([, odds, selection]) => [selection, Number(odds)])));
 });
 
+test('creates one selected pick per dark region without requiring a global-candidate match', () => {
+  const regions = [
+    { x0: 40, y0: 100, x1: 140, y1: 150 },
+    { x0: 150, y0: 100, x1: 250, y1: 150 },
+    { x0: 260, y0: 100, x1: 360, y1: 150 },
+    { x0: 370, y0: 100, x1: 470, y1: 150 },
+  ];
+  const crops = [
+    { words: [word('1:0', 50, 45), word('12', 50, 110)] },
+    { words: [word('1Z', 50, 45, 88), word('17', 50, 110)] },
+    { words: [word('??', 50, 45, 40)] },
+    { words: [] },
+  ].map((item, index) => ({
+    ...item,
+    region: regions[index],
+    scaleX: 4,
+    scaleY: 4,
+    cropWidth: 400,
+    cropHeight: 200,
+    offsetX: 40,
+    offsetY: 40,
+  }));
+  const pageWords = [
+    word('比分', 250, 20),
+    // This row is recovered only from full-page OCR words located inside region 3.
+    word('2:1', 290, 106),
+    word('23', 290, 123),
+  ];
+
+  const rows = parser.parseSelectedRegions(crops, pageWords, 500, 400);
+  assert.equal(rows.length, 4);
+  assert.equal(rows.every((row) => row.highlighted), true);
+  assert.deepEqual(JSON.stringify(rows.slice(0, 3).map(({ selection, odds }) => [selection, odds])),
+    JSON.stringify([['1:0', 12], ['1:2', 17], ['2:1', 23]]));
+  assert.equal(rows[3].unrecognized, true);
+  assert.equal(rows[3].needsReview, true);
+});
+
 test('root page and Sites Worker serve the same OCR assets without sending the image', async () => {
   assert.match(html, /<script src="\/ocr-parser\.js"><\/script>/);
   assert.match(html, /<script src="\/ocr-ui\.js"><\/script>/);
@@ -176,6 +214,9 @@ test('root page and Sites Worker serve the same OCR assets without sending the i
   assert.match(uiSource, /SINGLE_BLOCK/);
   assert.match(uiSource, /selectionWhitelist/);
   assert.match(uiSource, /selectionLabelConfidence/);
+  assert.match(uiSource, /parseSelectedRegions/);
+  assert.match(uiSource, /按选区建立/);
+  assert.doesNotMatch(uiSource, /匹配到/);
   assert.match(uiSource, /\[colorCanvas, ocrCanvas\]/);
   assert.match(uiSource, /offsetX: paddingX/);
   assert.match(uiSource, /ocrConfirm/);

@@ -101,3 +101,12 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Synthetic OCR regression tests cover four selected regions, a split score token, a Chinese other-score label, odds pairing, and crop-coordinate mapping. Root OCR/Worker tests: 18 passed. Sites Worker tests: 10 passed. Build and ESM artifact validation passed.
 - Private Site version 11 deployed successfully. Full Chinese OCR reprocessing of the uploaded screenshot in a live browser remains unverified in this environment.
 - The current report contains no screenshot or real selection/SP list. No API key, Telegram token, or server credential was added.
+
+
+## 2026-10-21 — Deep selection regions create picks directly
+
+- Each detected dark selection region now creates its own enabled, editable betting row. Selection rows do not depend on matching the global candidate list.
+- Recognition uses the enlarged region crop first, then falls back to full-page OCR words whose text boxes lie inside that same region. If the option or SP remains unreadable, the row stays visible and flagged for manual review.
+- The OCR status now reports option and SP recognition counts per region. Screenshot processing remains in the browser; screenshots and private ticket data are not uploaded or included in the repository.
+- Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 19 passed. Sites Worker tests: 10 passed. Build, ESM artifact validation, JavaScript syntax checks, and `git diff --check` passed.
+- Private Site version 12 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site. No amstd services were touched.
