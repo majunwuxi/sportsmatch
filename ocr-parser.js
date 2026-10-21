@@ -93,6 +93,12 @@
             current = mergeWord([current, words[i + 1], words[i + 2]], current._text + ":" + words[i + 2]._text);
             i += 2;
           }
+        } else if (/^\d+$/.test(current._text) && i + 2 < words.length && words[i + 1]._text === "." && /^\d+$/.test(words[i + 2]._text)) {
+          const a = current._box, dot = words[i + 1]._box, b = words[i + 2]._box;
+          if (dot.left - a.right <= gapLimit && b.left - dot.right <= gapLimit) {
+            current = mergeWord([current, words[i + 1], words[i + 2]], current._text + "." + words[i + 2]._text);
+            i += 2;
+          }
         } else if (/^[胜平负]$/.test(current._text) && ["其他", "其它"].includes(words[i + 1]?._text) && words[i + 1]._box.left - current._box.right <= gapLimit * 5) {
           current = mergeWord([current, words[i + 1]], current._text + words[i + 1]._text);
           i += 1;
@@ -130,7 +136,12 @@
   }
 
   function numericOdds(word) {
-    const text = normalize(word.text).replace(/[Oo]/g, "0");
+    // SP change indicators are decorative. OCR sometimes glues the glyph to
+    // the numeric odds (for example `13.5↓`), so strip only known arrow marks
+    // before validating the actual number.
+    const text = normalize(word.text)
+      .replace(/[↑↓↗↘↖↙⬆⬇⬈⬉⬊⬋⇧⇩↥↧▲▼△▽]/g, "")
+      .replace(/[Oo]/g, "0");
     if (!/^\d{1,5}(?:\.\d{1,4})?$/.test(text)) return null;
     const value = Number(text);
     return Number.isFinite(value) && value >= 1 ? value : null;

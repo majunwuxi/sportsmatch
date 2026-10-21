@@ -88,6 +88,34 @@ test('builds the other-score exclusion set from every recognized exact score wit
   assert.deepEqual(JSON.stringify(invalid.invalid), JSON.stringify(['负其它']));
 });
 
+test('includes exact-score SPs when OCR attaches upward or downward change arrows', () => {
+  const exactScores = [
+    '1:0', '2:0', '2:1', '3:0', '3:1', '3:2', '4:0', '4:1', '4:2', '5:0', '5:1', '5:2',
+    '0:0', '1:1', '2:2', '3:3',
+    '0:1', '0:2', '1:2', '0:3', '1:3', '2:3', '0:4', '1:4', '2:4', '0:5', '1:5', '2:5',
+  ];
+  const words = [word('比分', 420, 10)];
+  exactScores.forEach((selection, index) => {
+    const x = 40 + (index % 6) * 125;
+    const y = 60 + Math.floor(index / 6) * 38;
+    words.push(word(selection, x, y, 96, 36));
+    if (selection === '1:1') {
+      words.push(word('6', x, y + 19, 93, 10), word('.', x + 11, y + 19, 93, 4), word('5', x + 16, y + 19, 93, 10));
+      return;
+    }
+    const odds = index === 4 ? '13.5' : index % 2 ? '18' : String(9 + index);
+    words.push(word(odds + (index % 2 ? '↑' : ''), x, y + 19, 93, 30));
+    if (index % 2 === 0) words.push(word('↓', x + 31, y + 19, 90, 10));
+  });
+
+  const rows = parser.parse(words, 800, 400);
+  assert.equal(rows.length, exactScores.length);
+  assert.deepEqual(JSON.stringify(parser.listedScoresFromRows(rows)), JSON.stringify(exactScores));
+  assert.equal(rows.find((row) => row.selection === '3:1').odds, 13.5);
+  assert.equal(rows.find((row) => row.selection === '1:1').odds, 6.5);
+  assert.match(uiSource, /oddsWhitelist = "[^"]*↑↓/);
+});
+
 test('detects dark selected cells, filters a full-width button, and inverts white text for OCR', () => {
   const width = 240, height = 160;
   const pixels = new Uint8ClampedArray(width * height * 4);

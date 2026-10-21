@@ -98,3 +98,11 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Verification: Python source/test syntax and 10 isolated settlement/validation smoke checks passed; Node parser/Site Worker tests passed (`27/27`); the Site source Worker suite passed (`14/14`); `npm run build`, `npm run validate`, and `git diff --check` passed. The full Python/FastAPI pytest suite could not run in this environment because `pytest`, `fastapi`, and `httpx` are not installed. Browser OCR was not exercised against a real screenshot.
 - Owner-private ChatGPT Site version 16 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site. The Site refuses to create screenshot-based “other score” tasks unless `/api/health` advertises `screenshot_score_lists`.
 - The amstd backend has not been changed in this update. Pull this commit and restart only `sportsmatch-web.service` before using screenshot-based “胜其它／负其它” settlement. `napoli-monitor.service` was not accessed or changed; no secrets, screenshot, or private betting record were committed.
+
+## 2026-10-21 — SP arrows and split decimals
+
+- OCR now ignores known up/down arrow glyphs when parsing the numeric SP value, and the selected-cell odds OCR whitelist includes those glyphs so arrow-decorated odds remain available to the parser.
+- OCR fragment merging now recovers decimals split as three tokens (for example `6`, `.`, `5`). This also restores `1:1` in the supplied screenshot's score list when its SP is segmented that way.
+- Regression fixture covers all 28 exact correct-score outcomes shown in the screenshot layout, with attached and separate change arrows, decimal odds (`13.5` with a down arrow and split `6.5`), and confirms the full ordered list is emitted.
+- Verification: OCR parser tests `14/14`; Sites Worker tests `14/14`; parser/UI JavaScript syntax checks passed. The uploaded screenshot and ticket information are not committed.
+- Site Worker build, ESM artifact validation, and its 14 tests passed. Owner-private Site version 17 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site; access remains limited to the owner.

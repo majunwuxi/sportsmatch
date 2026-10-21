@@ -340,7 +340,7 @@
     const cropResults = [];
     const psm = globalThis.Tesseract?.PSM || {};
     const selectionWhitelist = "0123456789:.+OQZz胜平负其他其它主客";
-    const oddsWhitelist = "0123456789.OQ";
+    const oddsWhitelist = "0123456789.OQ↑↓↗↘↖↙⬆⬇⬈⬉⬊⬋⇧⇩↥↧▲▼△▽";
     try {
       for (let index = 0; index < regions.length; index++) {
         const region = regions[index];

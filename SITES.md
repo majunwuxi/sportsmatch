@@ -16,9 +16,9 @@ The browser cannot supply upstream credentials or a target URL. The proxy only a
 ## Current status
 
 Site project: `appgprj_6ad718b88cd8819195c1d2b1773221ad`.
-Owner-private URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site . Version 16 was deployed on 2026-10-21.
+Owner-private URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site . Version 17 was deployed on 2026-10-21.
 
-The independent backend was previously confirmed healthy with the poller enabled. Site version 16 now builds an editable per-screenshot list of exact-score SP options and requires a user confirmation when settling “胜其它／负其它”. The Site checks `/api/health` for `screenshot_score_lists` support before creating such a task, so the backend must be upgraded from the matching GitHub commit and only `sportsmatch-web.service` restarted first. No real API-Football result transition or Telegram message was triggered during this update.
+The independent backend was previously confirmed healthy with the poller enabled. Site version 17 builds an editable per-screenshot list of exact-score SP options, strips recognized SP change arrows without changing their numeric values, and recovers OCR decimals split into three fragments. It requires a user confirmation when settling “胜其它／负其它”. The Site checks `/api/health` for `screenshot_score_lists` support before creating such a task, so the backend must be upgraded from the matching GitHub commit and only `sportsmatch-web.service` restarted first. No real API-Football result transition or Telegram message was triggered during this update.
 
 NetEase Betting Assistant URLs are retained as source references only; the Site does not fetch those pages or scrape official odds. A screenshot can be processed in the browser using Tesseract.js and a Chinese language model fetched from the pinned CDN. The image is not sent to the Site Worker or backend. OCR proposes supported markets, selections, displayed SPs and highlighted cells; the user can review or edit both selected bets and the full exact-score SP list before export. If the CDN is unavailable or OCR is uncertain, manual entry remains available.
 
