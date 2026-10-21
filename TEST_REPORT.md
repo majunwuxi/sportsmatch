@@ -75,3 +75,13 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Root cause: the private Site CSP blocked the Tesseract.js CDN, WASM compilation, worker creation, and `blob:` screenshot preview. The allowlist now permits only jsDelivr and the Tesseract language-data host required by the browser OCR flow, plus local blob previews/workers. No wildcard origins or client-side secrets were added.
 - Verification: Sites Worker tests `10 passed`; artifact build and ESM validation passed. The private Site was redeployed as version 8. A live user screenshot has not yet been reprocessed in the browser.
 - No API key, Telegram token, server credential, or screenshot was committed.
+
+
+## 2026-10-21 — Selected-ticket screenshot OCR correction
+
+- Root cause: the parser surfaced unselected market options as candidates, while the white text on selected dark cells was not reliably recognized. The screenshot was processed in grayscale without an inversion step scoped to selected cells.
+- Fix: detect connected dark selected regions in the local screenshot, exclude the full-width confirmation bar, binarize and invert selected regions before OCR, and show only candidates intersecting a selected region by default. Other candidates remain available behind “显示其他未选候选项”; manual review remains available. Image pixels stay in the browser and are not sent to the backend.
+- Screenshot check: the supplied 749×902 image produced five selected regions for 2:0, 2:1, 3:0, 3:1, and 胜其他; the bottom confirmation button was excluded. The screenshot itself was not added to the repository.
+- Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` passed (15 tests); Site Worker tests passed (10 tests); Worker syntax check, Site build, and ESM artifact validation passed.
+- Scope: selection-region detection was checked against the supplied image. Full Chinese OCR end-to-end reprocessing in a live browser has not been performed yet, so the user should verify the selected labels and SP values after refreshing the private Site.
+- No API key, Telegram token, server credential, or private betting record was committed.

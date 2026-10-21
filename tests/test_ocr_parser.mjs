@@ -55,6 +55,36 @@ test('normalizes full-width screenshot text and rejects invalid SP/selection com
   assert.equal(parser.validatePick({ market: 'handicap', selection: '平', handicap: 10, odds: 2 }).ok, false);
 });
 
+test('detects dark selected cells, filters a full-width button, and inverts white text for OCR', () => {
+  const width = 240, height = 160;
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = 248;
+    pixels[offset + 3] = 255;
+  }
+  const fill = (x0, y0, x1, y1, color) => {
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      const offset = (y * width + x) * 4;
+      pixels[offset] = color[0]; pixels[offset + 1] = color[1]; pixels[offset + 2] = color[2];
+    }
+  };
+  fill(30, 40, 90, 66, [89, 96, 140]);
+  fill(48, 47, 62, 58, [255, 255, 255]);
+  fill(120, 40, 164, 66, [45, 45, 45]);
+  fill(132, 47, 148, 58, [255, 255, 255]);
+  fill(0, 145, width, 158, [245, 60, 65]);
+
+  const regions = parser.detectSelectedRegions(pixels, width, height);
+  assert.equal(regions.length, 2);
+  assert.equal(parser.containsSelectedRegion({ x0: 50, y0: 48, x1: 60, y1: 56 }, regions), true);
+  assert.equal(parser.containsSelectedRegion({ x0: 96, y0: 48, x1: 106, y1: 56 }, regions), false);
+  assert.equal(parser.containsSelectedRegion({ x0: 115, y0: 147, x1: 125, y1: 155 }, regions), false);
+
+  const gray = new Uint8ClampedArray([90, 90, 90, 255, 245, 245, 245, 255]);
+  parser.invertGrayPixels(gray);
+  assert.deepEqual([...gray], [255, 255, 255, 255, 0, 0, 0, 255]);
+});
+
 test('root page and Sites Worker serve the same OCR assets without sending the image', async () => {
   assert.match(html, /<script src="\/ocr-parser\.js"><\/script>/);
   assert.match(html, /<script src="\/ocr-ui\.js"><\/script>/);

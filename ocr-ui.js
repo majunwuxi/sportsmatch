@@ -4,6 +4,7 @@
   let screenshotFile = null;
   let screenshotUrl = null;
   let parsedPicks = null;
+  let showAllCandidates = false;
 
   function setOcrStatus(message, error = false) {
     const node = $("ocrStatus");
@@ -15,24 +16,47 @@
     if ($("ocrConfirm")) $("ocrConfirm").checked = false;
   }
 
-  function isHighlighted(canvas, bbox) {
-    const context = canvas.getContext("2d", { willReadFrequently: true });
-    const cx = (bbox.x0 + bbox.x1) / 2;
-    const x0 = Math.max(0, Math.floor(cx - Math.max(32, (bbox.x1 - bbox.x0) * 1.2)));
-    const x1 = Math.min(canvas.width, Math.ceil(cx + Math.max(32, (bbox.x1 - bbox.x0) * 1.2)));
-    const y0 = Math.max(0, Math.floor(bbox.y0 - 3));
-    const y1 = Math.min(canvas.height, Math.ceil(bbox.y1 + Math.max(25, (bbox.y1 - bbox.y0) * 1.6)));
-    if (x1 <= x0 || y1 <= y0) return false;
-    const pixels = context.getImageData(x0, y0, x1 - x0, y1 - y0).data;
-    let colored = 0, sampled = 0;
-    for (let i = 0; i < pixels.length; i += 4 * 3) {
-      const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
-      const high = Math.max(r, g, b), low = Math.min(r, g, b);
-      const luminance = (r * 3 + g * 5 + b * 2) / 10;
-      if (high - low > 32 && luminance > 35 && luminance < 205) colored++;
-      sampled++;
+  function detectSelectedRegions(colorCanvas, ocrCanvas) {
+    const scale = Math.min(1, 900 / Math.max(colorCanvas.width, colorCanvas.height));
+    const sample = document.createElement("canvas");
+    sample.width = Math.max(1, Math.round(colorCanvas.width * scale));
+    sample.height = Math.max(1, Math.round(colorCanvas.height * scale));
+    const sampleContext = sample.getContext("2d", { willReadFrequently: true });
+    sampleContext.drawImage(colorCanvas, 0, 0, sample.width, sample.height);
+    const regions = MatchMonitorOCR.detectSelectedRegions(
+      sampleContext.getImageData(0, 0, sample.width, sample.height).data,
+      sample.width,
+      sample.height,
+    ).map((region) => {
+      const sx = colorCanvas.width / sample.width;
+      const sy = colorCanvas.height / sample.height;
+      return {
+        x0: Math.max(0, Math.floor(region.x0 * sx)),
+        y0: Math.max(0, Math.floor(region.y0 * sy)),
+        x1: Math.min(colorCanvas.width, Math.ceil(region.x1 * sx)),
+        y1: Math.min(colorCanvas.height, Math.ceil(region.y1 * sy)),
+      };
+    });
+    const context = ocrCanvas.getContext("2d", { willReadFrequently: true });
+    for (const region of regions) {
+      const x = region.x0, y = region.y0;
+      const width = Math.max(0, region.x1 - x), height = Math.max(0, region.y1 - y);
+      if (!width || !height) continue;
+      const frame = context.getImageData(x, y, width, height);
+      MatchMonitorOCR.invertGrayPixels(frame.data);
+      context.putImageData(frame, x, y);
     }
-    return sampled > 0 && colored / sampled >= 0.24;
+    return regions;
+  }
+
+  function updateCandidateToggle() {
+    const button = $("toggleOcrCandidates");
+    if (!button || !parsedPicks) return;
+    const remaining = parsedPicks.filter((pick) => !pick.highlighted && !pick.enabled).length;
+    button.hidden = remaining === 0;
+    button.textContent = showAllCandidates
+      ? "收起未选候选项（" + remaining + "）"
+      : "显示其他未选候选项（" + remaining + "）";
   }
 
   function selectedPicks() {
@@ -61,7 +85,17 @@
     body.replaceChildren();
     if (!parsedPicks) return;
     const totalStake = selectedPicks().reduce((sum, item) => sum + Number(item.stake || 0), 0);
-    for (const [index, pick] of parsedPicks.entries()) {
+    const visiblePicks = parsedPicks.filter((pick) => pick.highlighted || pick.enabled || showAllCandidates);
+    if (!visiblePicks.length) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = 8;
+      cell.textContent = "未检测到深色底选项。请核对截图，或展开未选候选项后手动勾选。";
+      row.append(cell);
+      body.append(row);
+    }
+    for (const pick of visiblePicks) {
+      const index = parsedPicks.indexOf(pick);
       const tr = document.createElement("tr");
       const checkCell = document.createElement("td");
       const check = document.createElement("input");
@@ -141,6 +175,7 @@
       tr.append(checkCell, marketCell, selectionCell, handicapCell, oddsCell, stakeCell, resultCell, confidenceCell);
       body.append(tr);
     }
+    updateCandidateToggle();
     updateOcrTotals();
   }
 
@@ -164,7 +199,8 @@
     for (const row of parsedPicks) row.totalStake = total;
     const valid = picks.filter((pick) => validateRow(pick).ok && Number(pick.stake) >= 2);
     const minimum = valid.length ? Math.min(...valid.map((pick) => Number(pick.stake) * Number(pick.odds) - total)) : null;
-    $("ocrCount").textContent = "识别到 " + parsedPicks.length + " 项 · 已选择 " + picks.length + " 项 · 当前投入 " + money(total);
+    const highlighted = parsedPicks.filter((pick) => pick.highlighted).length;
+    $("ocrCount").textContent = "候选 " + parsedPicks.length + " 项 · 深色底选中 " + highlighted + " 项 · 当前勾选 " + picks.length + " 项 · 投入 " + money(total);
     $("ocrProfit").textContent = minimum === null
       ? "请选择项目、核对SP并分配金额。"
       : "单项命中时净利润区间：" + money(minimum) + " 至 " + money(Math.max(...valid.map((pick) => Number(pick.stake) * Number(pick.odds) - total))) + "。跨玩法同时命中时返奖会叠加。";
@@ -226,10 +262,12 @@
 
   function clearOcr() {
     parsedPicks = null;
+    showAllCandidates = false;
     clearOcrConfirmation();
     $("ocrReview").hidden = true;
     $("simulatorManual").hidden = true;
     $("ocrRows").replaceChildren();
+    $("toggleOcrCandidates").hidden = true;
     setOcrStatus("图片仅在本机浏览器识别，不会上传到 Match Monitor 后台。请上传投注页面截图。" );
     $("ocrPreview").hidden = true;
     if (screenshotUrl) URL.revokeObjectURL(screenshotUrl);
@@ -283,6 +321,7 @@
   $("betScreenshot").onchange = () => {
     const file = $("betScreenshot").files?.[0];
     parsedPicks = null;
+    showAllCandidates = false;
     clearOcrConfirmation();
     $("ocrReview").hidden = true;
     $("simulatorManual").hidden = true;
@@ -305,10 +344,12 @@
     $("ocrReview").hidden = true;
     $("simulatorManual").hidden = true;
     parsedPicks = null;
+    showAllCandidates = false;
     try {
       setOcrStatus("正在载入中文识别引擎（首次使用需联网下载并缓存）…");
       await loadTesseract();
       const canvases = await imageCanvases(screenshotFile);
+      const selectionRegions = detectSelectedRegions(canvases.color, canvases.ocr);
       const worker = await Tesseract.createWorker(["chi_sim", "eng"], 1, {
         logger: (event) => {
           if (event.status) setOcrStatus("截图识别中：" + event.status + (event.progress ? " " + Math.round(event.progress * 100) + "%" : ""));
@@ -316,7 +357,7 @@
       });
       try {
         const result = await worker.recognize(canvases.ocr, {}, { blocks: true });
-        parsedPicks = MatchMonitorOCR.parse(flattenOcrWords(result.data), canvases.width, canvases.height, (bbox) => isHighlighted(canvases.color, bbox))
+        parsedPicks = MatchMonitorOCR.parse(flattenOcrWords(result.data), canvases.width, canvases.height, (bbox) => MatchMonitorOCR.containsSelectedRegion(bbox, selectionRegions))
           .map((row) => ({ ...row, enabled: row.highlighted, stake: 0 }));
       } finally {
         await worker.terminate();
@@ -325,13 +366,15 @@
       clearOcrConfirmation();
       renderOcrRows();
       if (parsedPicks.length) {
-        $("market").value = parsedPicks[0].market;
+        $("market").value = (parsedPicks.find((row) => row.highlighted) || parsedPicks[0]).market;
         renderRows();
       }
       $("simulatorManual").hidden = false;
       const highlighted = parsedPicks.filter((row) => row.highlighted).length;
       setOcrStatus(parsedPicks.length
-        ? "识别出 " + parsedPicks.length + " 个候选项，其中 " + highlighted + " 个识别到选中底色。请逐项核对；颜色和OCR都可能误判。"
+        ? highlighted
+          ? "识别出 " + parsedPicks.length + " 个候选项，检测到 " + highlighted + " 个深色底选项；当前仅预选这些项目。其他候选项可展开查看。请核对文字与SP。"
+          : "识别到 " + parsedPicks.length + " 个候选项，但没有检测到深色底选项，因此没有自动勾选。可展开全部候选项手动选择，或换一张清晰截图重试。"
         : "没有识别到可用投注项。请换一张包含玩法标题、选项和SP的清晰截图，或手动填写模拟器。", !parsedPicks.length);
     } catch (error) {
       $("simulatorManual").hidden = false;
@@ -342,6 +385,7 @@
   };
 
   $("clearOcr").onclick = clearOcr;
+  $("toggleOcrCandidates").onclick = () => { showAllCandidates = !showAllCandidates; renderOcrRows(); };
   $("manualMode").onclick = () => { $("simulatorManual").hidden = false; $("market").focus(); };
   $("balanceOcr").onclick = () => {
     try { balanceOcrPicks(); }

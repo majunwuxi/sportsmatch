@@ -229,5 +229,91 @@
     return { ok: true, reason: "有效" };
   }
 
-  root.MatchMonitorOCR = { parse, validatePick, normalize };
+  function isDarkFillPixel(red, green, blue) {
+    const high = Math.max(red, green, blue);
+    const low = Math.min(red, green, blue);
+    const luminance = (red * 3 + green * 5 + blue * 2) / 10;
+    const chromaticFill = high - low >= 24 && luminance >= 28 && luminance <= 178;
+    const neutralFill = high <= 112 && high - low <= 24;
+    return chromaticFill || neutralFill;
+  }
+
+  function detectSelectedRegions(imageData, width, height) {
+    const pixels = imageData?.data || imageData;
+    const w = Math.floor(Number(width));
+    const h = Math.floor(Number(height));
+    if (!pixels || !Number.isInteger(w) || !Number.isInteger(h) || w < 1 || h < 1 || pixels.length < w * h * 4) return [];
+
+    const size = w * h;
+    const mask = new Uint8Array(size);
+    for (let pixel = 0, offset = 0; pixel < size; pixel++, offset += 4) {
+      mask[pixel] = isDarkFillPixel(pixels[offset], pixels[offset + 1], pixels[offset + 2]) ? 1 : 0;
+    }
+
+    const visited = new Uint8Array(size);
+    const queue = new Int32Array(size);
+    const minArea = Math.max(24, Math.floor(size * 0.00035));
+    const minWidth = Math.max(10, Math.ceil(w * 0.055));
+    const minHeight = Math.max(5, Math.ceil(h * 0.014));
+    const regions = [];
+
+    for (let start = 0; start < size; start++) {
+      if (!mask[start] || visited[start]) continue;
+      let head = 0, tail = 0, minX = w, minY = h, maxX = -1, maxY = -1;
+      visited[start] = 1;
+      queue[tail++] = start;
+      while (head < tail) {
+        const index = queue[head++];
+        const x = index % w;
+        const y = Math.floor(index / w);
+        minX = Math.min(minX, x); minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (!dx && !dy) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            const next = ny * w + nx;
+            if (mask[next] && !visited[next]) {
+              visited[next] = 1;
+              queue[tail++] = next;
+            }
+          }
+        }
+      }
+
+      const boxWidth = maxX - minX + 1;
+      const boxHeight = maxY - minY + 1;
+      const boxArea = boxWidth * boxHeight;
+      const fillRatio = tail / boxArea;
+      if (tail < minArea || boxWidth < minWidth || boxHeight < minHeight || fillRatio < 0.36) continue;
+      // A full-width bar near the bottom is usually a page button, not a selected betting cell.
+      if (minX <= w * 0.05 && maxX >= w * 0.95 && minY >= h * 0.78) continue;
+      regions.push({ x0: minX, y0: minY, x1: maxX + 1, y1: maxY + 1 });
+    }
+    return regions.sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
+  }
+
+  function containsSelectedRegion(bbox, regions) {
+    if (!bbox) return false;
+    const x0 = Number(bbox.x0 ?? bbox.left ?? 0);
+    const y0 = Number(bbox.y0 ?? bbox.top ?? 0);
+    const x1 = Number(bbox.x1 ?? (x0 + Number(bbox.width ?? 0)));
+    const y1 = Number(bbox.y1 ?? (y0 + Number(bbox.height ?? 0)));
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    return (regions || []).some((region) => cx >= region.x0 && cx <= region.x1 && cy >= region.y0 && cy <= region.y1);
+  }
+
+  function invertGrayPixels(data) {
+    for (let offset = 0; offset < data.length; offset += 4) {
+      // The selected-cell text is white; binarize it against a white background.
+      const value = data[offset] >= 190 ? 0 : 255;
+      data[offset] = value;
+      data[offset + 1] = value;
+      data[offset + 2] = value;
+    }
+    return data;
+  }
+
+  root.MatchMonitorOCR = { parse, validatePick, normalize, detectSelectedRegions, containsSelectedRegion, invertGrayPixels };
 })(globalThis);
