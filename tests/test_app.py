@@ -106,6 +106,9 @@ def test_auth(client):
         assert client.get(path).status_code==401
     assert client.get('/docs').status_code==404
     assert client.post('/api/tasks',headers={'origin':'https://evil.example'}).status_code==403
+    assert client.put('/api/tasks/1/schedule',json={'start_at':'2026-10-22T12:00:00+08:00','interval_minutes':10}).status_code==401
+    assert client.delete('/api/tasks/1').status_code==401
+    assert client.delete('/api/tasks/1',auth=('test','test-password'),headers={'origin':'https://evil.example'}).status_code==403
 
 def test_health_advertises_screenshot_score_list_support(client):
     response=client.get('/api/health',auth=('test','test-password'))
@@ -119,6 +122,45 @@ def test_future_resume(client,monkeypatch):
     r=client.get('/api/tasks',auth=('test','test-password')).json()[0]
     assert datetime.fromisoformat(r['next_check'])>=datetime.fromisoformat(start)
     assert r['home']=='A'
+
+def test_schedule_update_sets_start_and_interval(client,monkeypatch):
+    assert create(client,monkeypatch).status_code==200
+    start=(datetime.now(timezone.utc)+timedelta(hours=2)).isoformat()
+    response=client.put('/api/tasks/1/schedule',auth=('test','test-password'),json={'start_at':start,'interval_minutes':30})
+    assert response.status_code==200
+    body=response.json()
+    assert body['interval_minutes']==30 and body['status']=='pending'
+    row=client.get('/api/tasks',auth=('test','test-password')).json()[0]
+    assert datetime.fromisoformat(row['start_at'])==datetime.fromisoformat(start)
+    assert datetime.fromisoformat(row['next_check'])>=datetime.fromisoformat(start)
+
+def test_schedule_update_validates_input_and_preserves_paused_state(client,monkeypatch):
+    assert create(client,monkeypatch).status_code==200
+    auth=('test','test-password')
+    assert client.put('/api/tasks/1/schedule',auth=auth,json={'start_at':'2026-10-22T12:00:00','interval_minutes':10}).status_code==422
+    start=(datetime.now(timezone.utc)+timedelta(hours=2)).isoformat()
+    assert client.put('/api/tasks/1/schedule',auth=auth,json={'start_at':start,'interval_minutes':121}).status_code==422
+    assert client.put('/api/tasks/999/schedule',auth=auth,json={'start_at':start,'interval_minutes':10}).status_code==404
+    assert client.post('/api/tasks/1/pause',auth=auth).status_code==200
+    response=client.put('/api/tasks/1/schedule',auth=auth,json={'start_at':start,'interval_minutes':15})
+    assert response.status_code==200 and response.json()['status']=='paused'
+    row=client.get('/api/tasks',auth=auth).json()[0]
+    assert row['enabled']==0 and row['interval_minutes']==15
+
+def test_schedule_update_rejects_finished_task(client,monkeypatch):
+    assert create(client,monkeypatch).status_code==200
+    with m.conn() as c:c.execute("UPDATE tasks SET status='finished',enabled=0")
+    response=client.put('/api/tasks/1/schedule',auth=('test','test-password'),json={'start_at':datetime.now(timezone.utc).isoformat(),'interval_minutes':10})
+    assert response.status_code==409
+
+def test_delete_task_removes_it_and_prevents_a_stale_poll(client,monkeypatch):
+    task_data=task(client,monkeypatch)
+    response=client.delete('/api/tasks/1',auth=('test','test-password'))
+    assert response.status_code==200 and response.json()['deleted']==1
+    assert client.get('/api/tasks',auth=('test','test-password')).json()==[]
+    assert client.delete('/api/tasks/1',auth=('test','test-password')).status_code==404
+    monkeypatch.setattr(m,'api',lambda *a:(_ for _ in ()).throw(AssertionError('deleted task polled')))
+    m.tick(task_data)
 
 def task(client,monkeypatch):
     create(client,monkeypatch)
@@ -251,6 +293,10 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert 'id="ocrBudget"' in html and 'ocr-balance-row' in html
     assert 'id="ocrSelectedCount"' in html and 'id="ocrSelectedTotal"' in html
     assert 'id="exportOcrJson"' in html and 'id="applyOcrJson"' in html
+    assert 'id="scheduleDialog"' in html and 'id="scheduleStart"' in html
+    assert 'id="scheduleInterval"' in html and 'id="saveSchedule"' in html
+    assert '调整计划' in html and 'textContent="删除"' in html
+    assert 'method:"DELETE"' in html and '"/schedule"' in html
     assert '请选择项目、核对SP并分配金额。' in html
     assert 'expandedBetTaskIds' in html and '展开投注' in html and 'aria-expanded' in html
     assert 'const finished=t.status==="finished"' in html and 'b.disabled=finished' in html

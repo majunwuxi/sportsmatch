@@ -19,6 +19,7 @@ DB.parent.mkdir(parents=True, exist_ok=True)
 BASIC=HTTPBasic()
 STOP=threading.Event()
 LOCK=threading.Lock()
+TASK_LOCK=threading.RLock()
 POLL_ENABLED=os.getenv("ENABLE_POLLER","false").lower()=="true"
 LISTED_WINS={"1:0","2:0","2:1","3:0","3:1","3:2","4:0","4:1","4:2","5:0","5:1","5:2"}
 TERMINAL={"FT","AET","PEN","CANC","ABD","AWD","WO"}
@@ -158,6 +159,16 @@ def outcome(home,away,tickets,half_home=None,half_away=None,listed_scores=None):
         "pending_tickets":sum(1 for row in rows if row["won"] is None)}
 
 def tick(task):
+    # Serialize polling against schedule edits and deletion. Reload after taking
+    # the lock so a row copied by poll_loop before a delete cannot still run.
+    with TASK_LOCK:
+        with conn() as c:
+            current=c.execute("SELECT * FROM tasks WHERE id=? AND enabled=1 AND status IN ('pending','running')",(task["id"],)).fetchone()
+        if not current or _utc_datetime(current["next_check"])>datetime.now(timezone.utc):
+            return
+        return _tick(dict(current))
+
+def _tick(task):
     fid=task["fixture_id"]
     r=api("fixtures",{"id":fid})
     if len(r)!=1:raise RuntimeError("Fixture unavailable")
@@ -213,8 +224,13 @@ def poll_loop():
                 task=dict(row)
                 try:tick(task)
                 except Exception as e:
-                    next_at=(datetime.now(timezone.utc)+timedelta(minutes=max(5,task["interval_minutes"]))).isoformat()
-                    with conn() as c:c.execute("UPDATE tasks SET error=?,next_check=? WHERE id=?",(type(e).__name__+": provider/notification request failed; see protected server logs",next_at,task["id"]))
+                    with TASK_LOCK:
+                        with conn() as c:
+                            current=c.execute("SELECT enabled,status,next_check,interval_minutes FROM tasks WHERE id=?",(task["id"],)).fetchone()
+                            if current and current["enabled"] and current["status"] in {"pending","running"}:
+                                retry_at=datetime.now(timezone.utc)+timedelta(minutes=max(5,current["interval_minutes"]))
+                                next_at=max(_utc_datetime(current["next_check"]),retry_at).isoformat()
+                                c.execute("UPDATE tasks SET error=?,next_check=? WHERE id=?",(type(e).__name__+": provider/notification request failed; see protected server logs",next_at,task["id"]))
         except Exception as e:
             print("poll_loop:",repr(e),flush=True)
 
@@ -272,6 +288,10 @@ class TicketUpdateIn(BaseModel):
     tickets:list[Ticket]=Field(max_length=1000)
     listed_scores:list[str]|None=None
     listed_scores_verified:bool|None=None
+
+class ScheduleUpdateIn(BaseModel):
+    start_at:str
+    interval_minutes:int=Field(ge=1,le=120)
 
 def validate_tickets(items):
     if len(items)>1000: raise HTTPException(422,"Too many tickets")
@@ -385,35 +405,75 @@ def create_task(data:TaskIn,_:str=Depends(auth)):
 def update_tickets(task_id:int,data:list[Ticket]|TicketUpdateIn,_:str=Depends(auth)):
     tickets=data if isinstance(data,list) else data.tickets
     values=validate_tickets(tickets)
-    with conn() as c:
-        existing=c.execute("SELECT listed_scores_json,listed_scores_verified FROM tasks WHERE id=?",(task_id,)).fetchone()
-        if not existing:raise HTTPException(404,"Task not found")
-        if isinstance(data,list):
-            listed_scores=json.loads(existing["listed_scores_json"]) if existing["listed_scores_json"] else None
-            verified=bool(existing["listed_scores_verified"])
-        else:
-            if data.listed_scores is None:
+    with TASK_LOCK:
+        with conn() as c:
+            existing=c.execute("SELECT listed_scores_json,listed_scores_verified FROM tasks WHERE id=?",(task_id,)).fetchone()
+            if not existing:raise HTTPException(404,"Task not found")
+            if isinstance(data,list):
                 listed_scores=json.loads(existing["listed_scores_json"]) if existing["listed_scores_json"] else None
-                verified=bool(existing["listed_scores_verified"]) if data.listed_scores_verified is None else data.listed_scores_verified
+                verified=bool(existing["listed_scores_verified"])
             else:
-                listed_scores=validate_listed_scores(data.listed_scores)
-                verified=bool(data.listed_scores_verified)
-        validate_score_metadata(values,listed_scores,verified)
-        c.execute("UPDATE tasks SET ticket_json=?,listed_scores_json=?,listed_scores_verified=? WHERE id=?",
-            (json.dumps(values,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(verified),task_id))
+                if data.listed_scores is None:
+                    listed_scores=json.loads(existing["listed_scores_json"]) if existing["listed_scores_json"] else None
+                    verified=bool(existing["listed_scores_verified"]) if data.listed_scores_verified is None else data.listed_scores_verified
+                else:
+                    listed_scores=validate_listed_scores(data.listed_scores)
+                    verified=bool(data.listed_scores_verified)
+            validate_score_metadata(values,listed_scores,verified)
+            c.execute("UPDATE tasks SET ticket_json=?,listed_scores_json=?,listed_scores_verified=? WHERE id=?",
+                (json.dumps(values,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(verified),task_id))
     return {"ok":True,"tickets":len(values)}
+
+@app.put("/api/tasks/{task_id}/schedule")
+def update_schedule(task_id:int,data:ScheduleUpdateIn,_:str=Depends(auth)):
+    try:
+        start=datetime.fromisoformat(data.start_at)
+        if start.tzinfo is None:raise ValueError()
+    except ValueError:raise HTTPException(422,"start_at must include timezone offset")
+    start_utc=start.astimezone(timezone.utc)
+    now=datetime.now(timezone.utc)
+    with TASK_LOCK:
+        with conn() as c:
+            row=c.execute("SELECT status,enabled,next_check FROM tasks WHERE id=?",(task_id,)).fetchone()
+            if not row:raise HTTPException(404,"Task not found")
+            if row["status"] in {"finished","review_required"}:
+                raise HTTPException(409,"Finished or review-required task schedule cannot be changed")
+            status=row["status"]
+            if status=="pending":
+                next_check=max(start_utc,now)
+            elif status=="running":
+                if start_utc>now:
+                    status="pending"
+                    next_check=start_utc
+                else:
+                    next_check=max(_utc_datetime(row["next_check"]),now)
+            else:
+                # Paused or stopped tasks remain inactive until explicitly resumed.
+                next_check=max(start_utc,now)
+            c.execute("UPDATE tasks SET start_at=?,interval_minutes=?,next_check=?,status=? WHERE id=?",
+                (start_utc.isoformat(),data.interval_minutes,next_check.isoformat(),status,task_id))
+    return {"ok":True,"start_at":start_utc.isoformat(),"interval_minutes":data.interval_minutes,"status":status}
+
+@app.delete("/api/tasks/{task_id}")
+def delete_task(task_id:int,_:str=Depends(auth)):
+    with TASK_LOCK:
+        with conn() as c:
+            result=c.execute("DELETE FROM tasks WHERE id=?",(task_id,))
+            if result.rowcount==0:raise HTTPException(404,"Task not found")
+    return {"ok":True,"deleted":task_id}
 
 @app.post("/api/tasks/{task_id}/{action}")
 def task_action(task_id:int,action:str,_:str=Depends(auth)):
     if action not in {"pause","resume","stop"}:raise HTTPException(400,"Invalid action")
-    with conn() as c:
-        row=c.execute("SELECT status,start_at FROM tasks WHERE id=?",(task_id,)).fetchone()
-        if not row:raise HTTPException(404,"Task not found")
-        if row["status"] in {"finished","review_required"}:raise HTTPException(409,"Finished match cannot be resumed")
-        next_at=max(datetime.now(timezone.utc),datetime.fromisoformat(row["start_at"]).astimezone(timezone.utc)).isoformat()
-        vals={"pause":("paused",0),"resume":("pending",1),"stop":("stopped",0)}
-        status,enabled=vals[action]
-        c.execute("UPDATE tasks SET status=?,enabled=?,next_check=? WHERE id=?",(status,enabled,next_at,task_id))
+    with TASK_LOCK:
+        with conn() as c:
+            row=c.execute("SELECT status,start_at FROM tasks WHERE id=?",(task_id,)).fetchone()
+            if not row:raise HTTPException(404,"Task not found")
+            if row["status"] in {"finished","review_required"}:raise HTTPException(409,"Finished match cannot be resumed")
+            next_at=max(datetime.now(timezone.utc),datetime.fromisoformat(row["start_at"]).astimezone(timezone.utc)).isoformat()
+            vals={"pause":("paused",0),"resume":("pending",1),"stop":("stopped",0)}
+            status,enabled=vals[action]
+            c.execute("UPDATE tasks SET status=?,enabled=?,next_check=? WHERE id=?",(status,enabled,next_at,task_id))
     return {"ok":True,"status":status}
 
 @app.get("/api/usage")
