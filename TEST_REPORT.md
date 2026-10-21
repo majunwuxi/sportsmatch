@@ -166,3 +166,11 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Polling and task mutations are serialized with a task lock. Polling reloads the task after acquiring the lock and skips deleted, paused, stopped, or no-longer-due rows; retry handling rechecks current task state and interval.
 - Verification: OCR parser and Sites Worker tests `40/40`; JavaScript syntax checks, inline dashboard script syntax, Python compile, Worker syntax, and `git diff --check` passed. Python API tests were added for schedule validation/state preservation, finished-task rejection, deletion, and stale-poll safety, but could not run here because FastAPI, httpx, and pytest are unavailable in this environment.
 - Owner-private ChatGPT Site version 23 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site; Site source commit: `aa453f91f0889e41bc49f45802a7f4bc04035d9f`. Access remains owner-only. The custom-domain server has not been changed. Do not alter `napoli-monitor.service`.
+
+
+## 2026-10-21 — Dashboard two-column layout
+
+- The top dashboard now uses two responsive columns: the left side stacks “查找比赛” and “创建监测任务”, while “监测任务” occupies the right side. A horizontal divider separates this area from the simulator.
+- The simulator now spans the available page width as a single centered section. At viewport widths up to 900px, the upper dashboard collapses to one column.
+- Verification: Node OCR parser and Sites Worker tests `41/41`, including DOM section order and responsive layout assertions.
+- The Site remains owner-private.

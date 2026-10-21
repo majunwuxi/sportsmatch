@@ -287,6 +287,11 @@ def test_existing_database_migration_preserves_tasks_and_tickets(monkeypatch,tmp
 def test_index_contains_simulator_and_no_old_score_calculator():
     html=(m.Path(__file__).parents[1]/'index.html').read_text(encoding='utf-8')
     assert '竞彩足球比分投注模拟器' in html
+    assert 'class="dashboard-layout"' in html and 'class="dashboard-left"' in html
+    assert 'id="monitorTasks"' in html and 'class="simulator-card"' in html
+    assert 'class="section-divider"' in html
+    assert '.dashboard-layout{display:grid' in html and '@media(max-width:900px)' in html
+    assert html.index('<h2>查找比赛</h2>') < html.index('<h2>创建监测任务</h2>') < html.index('<h2>监测任务</h2>') < html.index('class="section-divider"') < html.index('竞彩足球比分投注模拟器')
     assert '下载JSON文件' in html and '自动均衡分配' in html
     assert 'betScreenshot' in html and 'ocrConfirm' in html and '/ocr-parser.js' in html and '/ocr-ui.js' in html
     assert 'id="simulatorManual" hidden' in html and 'id="manualMode"' in html
