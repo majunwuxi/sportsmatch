@@ -110,3 +110,11 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - The OCR status now reports option and SP recognition counts per region. Screenshot processing remains in the browser; screenshots and private ticket data are not uploaded or included in the repository.
 - Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 19 passed. Sites Worker tests: 10 passed. Build, ESM artifact validation, JavaScript syntax checks, and `git diff --check` passed.
 - Private Site version 12 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site. No amstd services were touched.
+
+## 2026-10-21 — Selected-cell OCR line recovery
+
+- Each highlighted betting cell now gets separate single-line OCR passes for the option and SP, using original-color and locally binarized crops; the strongest label and odds passes are combined and scored together.
+- Candidate labels are evaluated against the screenshot's current market section. For example, a bare “负” is no longer accepted as a valid “比分” option; “负其他” is required. If the label remains uncertain, the selected row remains editable and retains any independently recognized SP for manual review.
+- Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 20 passed; the Site Worker suite — 10 passed; build, ESM artifact validation, syntax checks, and `git diff --check` passed.
+- Owner-private Site version 13 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site. Access remains owner-only.
+- The user screenshot itself was not committed or sent to the backend. Full Chinese OCR reprocessing against the original betting image remains a user-side check because that original image is not available in the source workspace and local Tesseract lacks `chi_sim` data. No API key, Telegram token, server credential, or private betting record was committed.
