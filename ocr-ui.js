@@ -314,6 +314,8 @@
     screenshotUrl = null;
     screenshotFile = null;
     $("betScreenshot").value = "";
+    $("ocrFileName").textContent = "尚未选择图片";
+    $("ocrDropzone").classList.remove("drag-over");
   }
 
   async function loadTesseract() {
@@ -669,8 +671,7 @@
     return { color, ocr, width, height };
   }
 
-  $("betScreenshot").onchange = () => {
-    const file = $("betScreenshot").files?.[0];
+  function selectScreenshotFile(file) {
     parsedPicks = null;
     showAllCandidates = false;
     selectionRegionCount = 0;
@@ -680,15 +681,51 @@
     if (screenshotUrl) URL.revokeObjectURL(screenshotUrl);
     screenshotFile = null;
     screenshotUrl = null;
+    $("ocrPreview").hidden = true;
+    $("ocrFileName").textContent = "尚未选择图片";
     if (!file) return;
-    if (!file.type.startsWith("image/")) return setOcrStatus("请选择PNG、JPG或WEBP图片。", true);
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) return setOcrStatus("请选择PNG、JPG或WEBP图片。", true);
     if (file.size > 15 * 1024 * 1024) return setOcrStatus("图片大于15MB，请先压缩或裁剪后再上传。", true);
     screenshotFile = file;
     screenshotUrl = URL.createObjectURL(file);
     $("ocrPreview").src = screenshotUrl;
     $("ocrPreview").hidden = false;
+    $("ocrFileName").textContent = file.name || "已选择截图";
     setOcrStatus("已载入截图。点击“开始识别”；识别在当前浏览器本地运行，图片不会发送到服务器。" );
-  };
+  }
+
+  function bindScreenshotDropzone(dropzone, onFile, onInvalidDrop) {
+    let dragDepth = 0;
+    const hasFiles = (event) => Array.from(event.dataTransfer?.types || []).includes("Files");
+    dropzone.addEventListener("dragenter", (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      dragDepth += 1;
+      dropzone.classList.add("drag-over");
+    });
+    dropzone.addEventListener("dragover", (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      dropzone.classList.add("drag-over");
+    });
+    dropzone.addEventListener("dragleave", (event) => {
+      if (!hasFiles(event)) return;
+      if (dragDepth > 0) dragDepth -= 1;
+      if (dragDepth === 0 || !dropzone.contains(event.relatedTarget)) dropzone.classList.remove("drag-over");
+    });
+    dropzone.addEventListener("drop", (event) => {
+      event.preventDefault();
+      dragDepth = 0;
+      dropzone.classList.remove("drag-over");
+      const files = Array.from(event.dataTransfer?.files || []);
+      if (files.length !== 1) return onInvalidDrop("请一次拖入一张投注截图。" );
+      onFile(files[0]);
+    });
+  }
+
+  $("betScreenshot").onchange = () => selectScreenshotFile($("betScreenshot").files?.[0] || null);
+  bindScreenshotDropzone($("ocrDropzone"), selectScreenshotFile, (message) => setOcrStatus(message, true));
 
   $("runOcr").onclick = async () => {
     if (!screenshotFile) return setOcrStatus("请先选择投注页面截图。", true);
