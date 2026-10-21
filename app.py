@@ -2,10 +2,11 @@ import os, json, time, sqlite3, threading, urllib.request, urllib.parse
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, Response
 from pydantic import BaseModel, Field
 import secrets
 import base64
@@ -516,3 +517,48 @@ def ocr_ui(_:str=Depends(auth)):
 @app.get("/teams-map.js")
 def teams_map(_:str=Depends(auth)):
     return FileResponse(Path(__file__).with_name("teams-map.js"),media_type="application/javascript",headers={"Cache-Control":"no-store"})
+
+@lru_cache(maxsize=1)
+def team_directory_by_id():
+    source=Path(__file__).with_name("teams-map.js").read_text(encoding="utf-8").strip()
+    prefix="globalThis.MatchMonitorTeamDirectory="
+    if not source.startswith(prefix):
+        return {}
+    payload=source[len(prefix):].strip()
+    if payload.endswith(";"):
+        payload=payload[:-1]
+    try:
+        directory=json.loads(payload)
+    except json.JSONDecodeError:
+        return {}
+    return directory if isinstance(directory,dict) else {}
+
+class _NoTeamLogoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+def fetch_team_logo(logo_url):
+    request=urllib.request.Request(logo_url,headers={"User-Agent":"MatchMonitor/1.0"})
+    opener=urllib.request.build_opener(_NoTeamLogoRedirect())
+    try:
+        with opener.open(request,timeout=8) as upstream:
+            content_type=upstream.headers.get_content_type()
+            if content_type!="image/png":
+                raise HTTPException(status_code=502,detail="球队队徽服务返回了非PNG图片")
+            image=upstream.read(2*1024*1024+1)
+            if len(image)>2*1024*1024:
+                raise HTTPException(status_code=502,detail="球队队徽图片超过大小限制")
+            return image
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(status_code=502,detail="暂时无法加载球队队徽") from error
+
+@app.get("/team-logo/{team_id}.png")
+def team_logo(team_id:int, _:str=Depends(auth)):
+    entry=team_directory_by_id().get(str(team_id))
+    logo_url=f"https://media.api-sports.io/football/teams/{team_id}.png"
+    if not entry or entry.get("logo")!=logo_url:
+        raise HTTPException(status_code=404,detail="球队队徽不存在")
+    image=fetch_team_logo(logo_url)
+    return Response(image,media_type="image/png",headers={"Cache-Control":"private, max-age=86400","X-Content-Type-Options":"nosniff"})

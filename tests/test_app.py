@@ -155,7 +155,7 @@ def test_total_goals_seven_plus_and_handicap_other_side():
     assert r['payout']==12
 
 def test_auth(client):
-    for path in ['/','/ocr-parser.js','/ocr-ui.js','/teams-map.js','/api/tasks','/api/fixtures?date=2026-10-20','/api/usage','/api/health']:
+    for path in ['/','/ocr-parser.js','/ocr-ui.js','/teams-map.js','/team-logo/569.png','/api/tasks','/api/fixtures?date=2026-10-20','/api/usage','/api/health']:
         assert client.get(path).status_code==401
     assert client.get('/docs').status_code==404
     assert client.post('/api/tasks',headers={'origin':'https://evil.example'}).status_code==403
@@ -378,6 +378,19 @@ def test_team_map_asset_is_authenticated_and_contains_team_badges(client):
     assert 'MatchMonitorTeamDirectory' in response.text
     assert 'Club Brugge KV' in response.text and '布鲁日' in response.text
     assert 'https://media.api-sports.io/football/teams/569.png' in response.text
+
+def test_team_logo_proxy_only_fetches_allowlisted_team_images(client,monkeypatch):
+    calls=[]
+    monkeypatch.setattr(m,'fetch_team_logo',lambda url:(calls.append(url) or b'png-test-bytes'))
+    response=client.get('/team-logo/569.png',auth=('test','test-password'))
+    assert response.status_code==200
+    assert response.content==b'png-test-bytes'
+    assert response.headers['content-type']=='image/png'
+    assert response.headers['cache-control']=='no-store'
+    assert response.headers['x-content-type-options']=='nosniff'
+    assert calls==['https://media.api-sports.io/football/teams/569.png']
+    assert client.get('/team-logo/999999.png',auth=('test','test-password')).status_code==404
+    assert calls==['https://media.api-sports.io/football/teams/569.png']
 
 def test_ocr_assets_are_authenticated_and_local_code_only(client):
     for path, marker in [('/ocr-parser.js','MatchMonitorOCR'),('/ocr-ui.js','createImageBitmap(file)')]:
