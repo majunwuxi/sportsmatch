@@ -95,8 +95,8 @@ curl --fail-with-body -sS --user matchmonitor https://sportsmatch.sendmymail.top
 curl --fail-with-body -sS --user matchmonitor https://sportsmatch.sendmymail.top/api/health
 ```
 
-`curl` 会提示输入服务密码；不要把密码贴到聊天中。新增 `/ocr-parser.js` 和 `/ocr-ui.js` 两个受 HTTP Basic 保护的路由。两个脚本及 `/api/health` 都应返回 HTTP 200。此截图识别更新不改 SQLite 表或已存投注数据。任何情况下都不要停止、重启、覆盖或修改 `napoli-monitor.service`。
+`curl` 会提示输入服务密码；不要把密码贴到聊天中。新增 `/ocr-parser.js` 和 `/ocr-ui.js` 两个受 HTTP Basic 保护的路由。两个脚本及 `/api/health` 都应返回 HTTP 200。任务列表更新会为既有 SQLite 数据库添加 `finished_at` 字段，并用原有 `last_check` 回填已完赛任务，不会删除任务或投注数据。未来开赛且等待/暂停中的比赛按开始时间升序显示；后台首次确认完赛满 24 小时后，该任务会从列表隐藏。现有 Site 已按后台返回顺序显示任务，无需为这项规则重新部署 Site。任何情况下都不要停止、重启、覆盖或修改 `napoli-monitor.service`。
 
 截图仅在浏览器本地处理，不会提交给 Sites Worker、FastAPI 或 API-Football。浏览器首次识别需联网下载固定版本的 Tesseract.js OCR 引擎和中文模型；CDN 不可用时可手动填写。用户需要逐项核对 OCR 给出的玩法、选项和 SP。
 
-The backend was configured and the user confirmed the previous release is active with the poller enabled. This release requires the update above to serve the new authenticated OCR assets. See TEST_REPORT.md for verification and remaining live checks.
+The backend was configured and the user confirmed the previous release is active with the poller enabled. Pull this release and restart only `sportsmatch-web.service` to serve the OCR assets and apply the task retention/order behavior. See TEST_REPORT.md for verification and remaining live checks.

@@ -44,7 +44,7 @@ The user confirmed that backend commit `ca5b33d` is active and its authenticated
 
 ## 2026-10-21 — Local screenshot OCR and mixed-market simulation
 
-- Python/FastAPI suite: `24 passed`. Added authenticated checks for the two OCR script routes; existing settlement and scheduler tests also pass.
+- Python/FastAPI suite: `25 passed`. Added authenticated checks for the two OCR script routes; existing settlement and scheduler tests also pass.
 - Sites Worker suite: `9 passed`. Confirms the private Worker serves its page and OCR assets, preserves visitor/auth and proxy controls, and does not expose backend secrets.
 - OCR parser suite: `4 passed`. Covers correct-score and other-score markets, 1X2, handicap inference, total goals, half/full, odds validation, full-width characters, selected-cell mapping, and matching root/Sites asset contents.
 - `node --check` passed for the OCR parser, OCR UI and Sites Worker. Sites Worker build and ESM artifact validation passed; `git diff --check` passed.
@@ -52,3 +52,12 @@ The user confirmed that backend commit `ca5b33d` is active and its authenticated
 - Browser-side OCR was not exercised end-to-end against a real screenshot in this environment. The selected Sites Worker starter has no managed preview entrypoint, and the Chinese trained data is not installed in the local Tesseract binary. Unit tests use representative OCR word boxes. CDN/CSP behavior and OCR accuracy still need a real browser check; manual entry remains available if recognition is unavailable or uncertain.
 
 This change adds only frontend OCR asset routes; it does not alter database schema or schedule/settlement behavior. No screenshot, real betting record, API key, Telegram token or server credential was committed. It did not call API-Football or send Telegram messages, and did not access or alter `napoli-monitor.service`.
+
+## 2026-10-21 — Upcoming order and finished-task retention
+
+- Upcoming tasks in `pending` or `paused` state are returned first, ordered by `start_at` ascending. Other visible tasks retain their prior newest-created-first order.
+- A normally finished task records `finished_at` when the backend first confirms a terminal provider status. It is hidden from `/api/tasks` at 24 hours after that timestamp; cancelled/abandoned tasks awaiting manual review are not treated as normally finished.
+- Existing SQLite databases are migrated in place. For finished rows without `finished_at`, migration uses `last_check` (or `created_at` when no check time exists); task and ticket records are preserved.
+- Python/FastAPI suite: `25 passed`, including mixed upcoming ordering, inclusion just before the 24-hour cutoff, exclusion after the cutoff, final-time capture, and legacy database migration.
+- No Site source change was required because the Site renders `/api/tasks` in backend order. The already-published owner-private Site remains version 6. The final live page/OCR check is pending owner sign-in approval in the browser; no real screenshot was processed.
+- The custom-domain backend still needs the documented `git pull --ff-only` and restart of only `sportsmatch-web.service` before this behavior is active there. `napoli-monitor.service` was not touched.

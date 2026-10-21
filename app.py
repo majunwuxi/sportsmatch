@@ -50,7 +50,7 @@ def init_db():
           interval_minutes INTEGER NOT NULL,
           enabled INTEGER NOT NULL DEFAULT 1,
           status TEXT NOT NULL DEFAULT 'pending',
-          last_score TEXT, last_check TEXT, next_check TEXT NOT NULL,
+          last_score TEXT, last_check TEXT, finished_at TEXT, next_check TEXT NOT NULL,
           ticket_json TEXT NOT NULL DEFAULT '[]',
           error TEXT, created_at TEXT NOT NULL
         );
@@ -66,6 +66,9 @@ def init_db():
             c.execute("ALTER TABLE tasks ADD COLUMN half_score TEXT")
         if "provider_status" not in columns:
             c.execute("ALTER TABLE tasks ADD COLUMN provider_status TEXT")
+        if "finished_at" not in columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN finished_at TEXT")
+        c.execute("UPDATE tasks SET finished_at=COALESCE(NULLIF(last_check,''),created_at) WHERE status='finished' AND finished_at IS NULL")
 
 def auth(credentials:HTTPBasicCredentials=Depends(BASIC)):
     username=os.getenv("ADMIN_USER","")
@@ -185,9 +188,10 @@ def tick(task):
     changed=task.get("last_score")!=score or task.get("provider_status")!=status
     should_send=(changed and (score is not None or task.get("provider_status")!=status)) or closed
     if should_send: notify(message)
+    task_status="review_required" if status in VOID else "finished" if closed else "running"
     with conn() as c:
-        c.execute("UPDATE tasks SET last_score=?,settlement_score=?,half_score=?,provider_status=?,last_check=?,next_check=?,status=?,error=NULL WHERE id=? AND enabled=1 AND status IN ('pending','running')",
-             (score,regulation_score,f"{half_h}:{half_a}" if half_h is not None and half_a is not None else None,status,now.isoformat(),next_at,"review_required" if status in VOID else "finished" if closed else "running",task["id"]))
+        c.execute("UPDATE tasks SET last_score=?,settlement_score=?,half_score=?,provider_status=?,last_check=?,next_check=?,status=?,finished_at=CASE WHEN ?='finished' THEN COALESCE(finished_at,?) ELSE finished_at END,error=NULL WHERE id=? AND enabled=1 AND status IN ('pending','running')",
+             (score,regulation_score,f"{half_h}:{half_a}" if half_h is not None and half_a is not None else None,status,now.isoformat(),next_at,task_status,task_status,now.isoformat(),task["id"]))
 
 def poll_loop():
     while not STOP.wait(5):
@@ -274,10 +278,34 @@ def fixtures(date:str=Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),q:str="",_:str=Depen
              "kickoff":x["fixture"]["date"],"status":x["fixture"]["status"]["short"],"status_cn":STATUS_CN.get(x["fixture"]["status"]["short"],x["fixture"]["status"]["short"])}
              for x in matches if not term or term in x["teams"]["home"]["name"].casefold() or term in x["teams"]["away"]["name"].casefold()]
 
+def _utc_datetime(value):
+    try:
+        parsed=datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed=parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError,ValueError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+
 @app.get("/api/tasks")
 def tasks(_:str=Depends(auth)):
+    now=datetime.now(timezone.utc)
     with conn() as c:
         rows=[dict(x) for x in c.execute("SELECT * FROM tasks ORDER BY created_at DESC")]
+    upcoming=[]
+    visible=[]
+    for x in rows:
+        if x["status"]=="finished":
+            ended=x.get("finished_at") or x.get("last_check") or x.get("created_at")
+            if _utc_datetime(ended)+timedelta(hours=24)<=now:
+                continue
+        start=_utc_datetime(x.get("start_at"))
+        if x["status"] in {"pending","paused"} and start>now:
+            upcoming.append(x)
+        else:
+            visible.append(x)
+    upcoming.sort(key=lambda x:(_utc_datetime(x.get("start_at")),x["id"]))
+    rows=upcoming+visible
     for x in rows:
         x["tickets"]=json.loads(x.pop("ticket_json"))
         parts=(x.get("settlement_score") or x["last_score"] or "").split(":")

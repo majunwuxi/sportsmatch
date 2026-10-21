@@ -120,6 +120,28 @@ def test_tasks_expose_chinese_status_and_bet_breakdown(client,monkeypatch):
     assert row['settlement']['tickets'][0]['share_pct']==66.67
     assert row['settlement']['tickets'][1]['won'] is False
 
+def test_tasks_sort_upcoming_by_start_and_hide_finished_after_24_hours(client):
+    now=datetime.now(timezone.utc)
+    def add(fixture_id,status,start,created,finished_at=None):
+        with m.conn() as c:
+            cur=c.execute("""INSERT INTO tasks(fixture_id,home,away,start_at,interval_minutes,next_check,status,finished_at,ticket_json,created_at)
+                VALUES(?, 'A', 'B', ?, 5, ?, ?, ?, '[]', ?)""",
+                (fixture_id,start.isoformat(),now.isoformat(),status,finished_at.isoformat() if finished_at else None,created.isoformat()))
+            return cur.lastrowid
+    older_created=now-timedelta(hours=2)
+    soon=add(101,'pending',now+timedelta(minutes=15),older_created)
+    next_up=add(102,'paused',now+timedelta(minutes=45),older_created+timedelta(minutes=1))
+    later=add(103,'pending',now+timedelta(hours=2),older_created+timedelta(minutes=2))
+    add(104,'running',now-timedelta(minutes=10),now-timedelta(minutes=1))
+    recent_finished=add(105,'finished',now-timedelta(hours=26),now-timedelta(hours=25),now-timedelta(hours=23))
+    expired_finished=add(106,'finished',now-timedelta(hours=30),now-timedelta(hours=29),now-timedelta(hours=24,seconds=1))
+
+    rows=client.get('/api/tasks',auth=('test','test-password')).json()
+    ids=[row['id'] for row in rows]
+    assert ids[:3]==[soon,next_up,later]
+    assert recent_finished in ids
+    assert expired_finished not in ids
+
 def test_poll_uses_live_score_for_display_and_chinese_telegram(monkeypatch,tmp_path):
     monkeypatch.setattr(m,'DB',tmp_path/'tick.sqlite')
     m.init_db()
@@ -130,8 +152,9 @@ def test_poll_uses_live_score_for_display_and_chinese_telegram(monkeypatch,tmp_p
         c.execute("INSERT OR REPLACE INTO tasks(id,fixture_id,home,away,start_at,interval_minutes,next_check,ticket_json,created_at) VALUES(321,12,'A','B','2026-01-01T00:00:00+00:00',5,'2026-01-01T00:00:00+00:00',?,'2026-01-01T00:00:00+00:00')",(t['ticket_json'],))
     m.tick(t)
     with m.conn() as c:
-        row=c.execute('SELECT last_score,settlement_score,status FROM tasks WHERE id=321').fetchone()
-    assert tuple(row)==('2:0','1:0','finished')
+        row=c.execute('SELECT last_score,settlement_score,status,finished_at FROM tasks WHERE id=321').fetchone()
+    assert tuple(row[i] for i in range(3))==('2:0','1:0','finished')
+    assert row['finished_at'] is not None
     assert '状态：加时赛结束' in messages[0]
     assert '返奖 ¥8.00' in messages[0]
 
@@ -159,15 +182,16 @@ def test_existing_database_migration_preserves_tasks_and_tickets(monkeypatch,tmp
           created_at TEXT NOT NULL
         );
         CREATE TABLE usage (utc_day TEXT PRIMARY KEY, requests INTEGER NOT NULL DEFAULT 0);
-        INSERT INTO tasks(fixture_id,home,away,start_at,interval_minutes,next_check,last_score,ticket_json,created_at)
-        VALUES(22,'A','B','2026-10-21T00:00:00+00:00',10,'2026-10-21T00:00:00+00:00','3:0','[{"selection":"3:0","stake":2,"odds":5}]','2026-10-20T00:00:00+00:00');
+        INSERT INTO tasks(fixture_id,home,away,start_at,interval_minutes,next_check,last_score,status,last_check,ticket_json,created_at)
+        VALUES(22,'A','B','2026-10-21T00:00:00+00:00',10,'2026-10-21T00:00:00+00:00','3:0','finished','2026-10-21T01:00:00+00:00','[{"selection":"3:0","stake":2,"odds":5}]','2026-10-20T00:00:00+00:00');
         """)
     m.init_db()
     with m.conn() as c:
-        row=c.execute('SELECT last_score,settlement_score,ticket_json FROM tasks WHERE fixture_id=22').fetchone()
+        row=c.execute('SELECT last_score,settlement_score,ticket_json,finished_at FROM tasks WHERE fixture_id=22').fetchone()
         columns={r[1] for r in c.execute('PRAGMA table_info(tasks)')}
-    assert tuple(row)==('3:0','3:0','[{"selection":"3:0","stake":2,"odds":5}]')
-    assert {'settlement_score','half_score','provider_status'}<=columns
+    assert tuple(row[i] for i in range(3))==('3:0','3:0','[{"selection":"3:0","stake":2,"odds":5}]')
+    assert row['finished_at']=='2026-10-21T01:00:00+00:00'
+    assert {'settlement_score','half_score','provider_status','finished_at'}<=columns
 
 def test_index_contains_simulator_and_no_old_score_calculator():
     html=(m.Path(__file__).parents[1]/'index.html').read_text(encoding='utf-8')
