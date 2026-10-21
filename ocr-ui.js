@@ -15,6 +15,7 @@
 
   function clearOcrConfirmation() {
     if ($("ocrConfirm")) $("ocrConfirm").checked = false;
+    if ($("verifyListedScores")) $("verifyListedScores").checked = false;
   }
 
   function detectSelectedRegions(colorCanvas, ocrCanvas) {
@@ -250,15 +251,24 @@
       odds: Number(pick.odds),
       ...(pick.market === "handicap" ? { handicap: Number(pick.handicap) } : {}),
     }));
+    const listedScoreResult = MatchMonitorOCR.parseListedScores($("listedScores").value);
+    if (!listedScoreResult.ok) throw Error("截图精确比分清单中有无效选项：" + listedScoreResult.invalid.join("、"));
+    const usesOther = tickets.some((ticket) => ticket.market === "correct_score"
+      && ["胜其他", "平其他", "负其他"].includes(MatchMonitorOCR.normalize(ticket.selection).replace("其它", "其他")));
+    if (usesOther && (!listedScoreResult.scores.length || !$("verifyListedScores").checked)) {
+      throw Error("投注含‘胜其它/负其它’：请先补全截图中全部带SP的精确比分清单，并勾选清单确认。");
+    }
     const total = tickets.reduce((sum, ticket) => sum + ticket.stake, 0);
     return {
-      schema_version: 1,
+      schema_version: 2,
       fixture_id: selected?.id ?? null,
       home: selected?.home ?? null,
       away: selected?.away ?? null,
       kickoff: selected?.kickoff ?? null,
-            screenshot_ocr: "browser_local_reviewed",
+      screenshot_ocr: "browser_local_reviewed",
       budget: total,
+      listed_scores: listedScoreResult.scores,
+      listed_scores_verified: $("verifyListedScores").checked,
       tickets,
     };
   }
@@ -271,6 +281,7 @@
     $("ocrReview").hidden = true;
     $("simulatorManual").hidden = true;
     $("ocrRows").replaceChildren();
+    $("listedScores").value = "";
     $("toggleOcrCandidates").hidden = true;
     setOcrStatus("图片仅在本机浏览器识别，不会上传到 Match Monitor 后台。请上传投注页面截图。" );
     $("ocrPreview").hidden = true;
@@ -496,6 +507,7 @@
         parsedPicks = [...otherCandidates, ...selectedRows]
           .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x)
           .map((row) => ({ ...row, enabled: row.highlighted, stake: 0 }));
+        $("listedScores").value = MatchMonitorOCR.listedScoresFromRows(parsedPicks).join(", ");
       } finally {
         await worker.terminate();
       }
@@ -510,12 +522,13 @@
       const highlighted = parsedPicks.filter((row) => row.highlighted).length;
       const recognizedLabels = parsedPicks.filter((row) => row.highlighted && row.selection && !row.unrecognized).length;
       const recognizedOdds = parsedPicks.filter((row) => row.highlighted && row.odds !== null).length;
+      const listedScoreCount = MatchMonitorOCR.listedScoresFromRows(parsedPicks).length;
       setOcrStatus(parsedPicks.length
         ? highlighted
-          ? "识别出 " + parsedPicks.length + " 个候选项，检测到 " + selectionRegionCount + " 块深色选区，并按选区建立 " + highlighted + " 条投注项（选项识别 " + recognizedLabels + "/" + selectionRegionCount + "，SP识别 " + recognizedOdds + "/" + selectionRegionCount + "）。每块选区都有对应行；请核对未识别或低置信度的文字与SP。其他候选项可展开查看。"
+          ? "识别出 " + parsedPicks.length + " 个候选项，检测到 " + selectionRegionCount + " 块深色选区，并按选区建立 " + highlighted + " 条投注项（选项识别 " + recognizedLabels + "/" + selectionRegionCount + "，SP识别 " + recognizedOdds + "/" + selectionRegionCount + "）。识别到 " + listedScoreCount + " 个带SP的精确比分；请核对并补齐下方用于‘其他’结算的完整清单。"
           : selectionRegionCount
-            ? "检测到 " + selectionRegionCount + " 块深色选区，但未能建立选区记录。请重试或手动填写。"
-            : "识别到 " + parsedPicks.length + " 个候选项，但没有检测到深色底选项，因此没有自动勾选。可展开全部候选项手动选择，或换一张清晰截图重试。"
+            ? "检测到 " + selectionRegionCount + " 块深色选区，但未能建立选区记录。识别到 " + listedScoreCount + " 个带SP的精确比分；请核对清单。"
+            : "识别到 " + parsedPicks.length + " 个候选项，但没有检测到深色底选项，因此没有自动勾选。识别到 " + listedScoreCount + " 个带SP的精确比分；可展开候选项并核对清单。"
         : "没有识别到可用投注项。请换一张包含玩法标题、选项和SP的清晰截图，或手动填写模拟器。", !parsedPicks.length);
     } catch (error) {
       $("simulatorManual").hidden = false;
@@ -526,6 +539,7 @@
   };
 
   $("clearOcr").onclick = clearOcr;
+  $("listedScores").oninput = () => clearOcrConfirmation();
   $("toggleOcrCandidates").onclick = () => { showAllCandidates = !showAllCandidates; renderOcrRows(); };
   $("manualMode").onclick = () => { $("simulatorManual").hidden = false; $("market").focus(); };
   $("balanceOcr").onclick = () => {

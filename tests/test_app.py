@@ -36,6 +36,42 @@ def test_other_character_spelling_is_valid_and_settles_like_other_score():
     assert result['tickets'][0]['won'] is True
     assert result['payout']==5
 
+def test_other_score_uses_screenshot_sp_list_as_not_in_set():
+    tickets=[{'market':'correct_score','selection':'胜其它','stake':2,'odds':20}]
+    listed=m.outcome(5,2,tickets,listed_scores=['5:2','2:0'])
+    omitted=m.outcome(5,2,tickets,listed_scores=['2:0'])
+    assert listed['tickets'][0]['won'] is False
+    assert listed['payout']==0
+    assert omitted['tickets'][0]['won'] is True
+    assert omitted['payout']==40
+    exact=m.outcome(5,2,[{'market':'correct_score','selection':'5:2','stake':2,'odds':8}],listed_scores=['5:2'])
+    assert exact['tickets'][0]['won'] is True
+    away=m.outcome(2,5,[{'market':'correct_score','selection':'负其它','stake':2,'odds':10}],listed_scores=['2:5'])
+    assert away['tickets'][0]['won'] is False
+
+def test_task_persists_screenshot_sp_list_and_requires_confirmation(client,monkeypatch):
+    monkeypatch.setattr(m,'api',lambda *a:[fixture()])
+    body={'fixture_id':12,'home':'spoof','away':'spoof','start_at':datetime.now(timezone.utc).isoformat(),
+        'interval_minutes':5,'tickets':[{'market':'correct_score','selection':'胜其它','stake':2,'odds':20}],
+        'listed_scores':['5:2','2:0'],'listed_scores_verified':True}
+    response=client.post('/api/tasks',auth=('test','test-password'),json=body)
+    assert response.status_code==200
+    with m.conn() as c:
+        c.execute("UPDATE tasks SET last_score='5:2',settlement_score='5:2'")
+    row=client.get('/api/tasks',auth=('test','test-password')).json()[0]
+    assert row['listed_scores']==['5:2','2:0']
+    assert row['listed_scores_verified'] is True
+    assert row['settlement']['score_list_source']=='截图SP识别清单'
+    assert row['settlement']['tickets'][0]['won'] is False
+    body['listed_scores_verified']=False
+    body['fixture_id']=13
+    assert client.post('/api/tasks',auth=('test','test-password'),json=body).status_code==422
+
+def test_listed_score_validation_rejects_non_exact_options():
+    with pytest.raises(m.HTTPException) as error:
+        m.validate_listed_scores(['负其它'])
+    assert error.value.status_code==422
+
 def test_all_jczq_markets_settle_against_regular_time_and_halftime():
     tickets=[
         {'market':'correct_score','selection':'2:1','stake':2,'odds':6},
@@ -70,6 +106,11 @@ def test_auth(client):
         assert client.get(path).status_code==401
     assert client.get('/docs').status_code==404
     assert client.post('/api/tasks',headers={'origin':'https://evil.example'}).status_code==403
+
+def test_health_advertises_screenshot_score_list_support(client):
+    response=client.get('/api/health',auth=('test','test-password'))
+    assert response.status_code==200
+    assert response.json()['screenshot_score_lists'] is True
 
 def test_future_resume(client,monkeypatch):
     start=(datetime.now(timezone.utc)+timedelta(days=2)).isoformat()

@@ -88,3 +88,13 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - The repository backend now accepts this alias, but the running `/opt/sportsmatch` service does not receive repository changes until it is updated and only `sportsmatch-web.service` is restarted. No existing service was remotely changed.
 - Owner-private ChatGPT Site version 15 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site. Site access remains owner-only.
 - No screenshot or ticket data was committed. Existing backend credentials, API-Football, Telegram, and amstd services were not touched; `napoli-monitor.service` was not accessed.
+
+## 2026-10-21 — Screenshot SP list for “other score” settlement
+
+- Screenshot OCR now builds a per-image exact-score list from all recognized correct-score rows that have a valid SP, including unselected rows. The list is editable so the user can correct OCR omissions or false detections before export.
+- `胜其它` and `负其它` use the confirmed screenshot list as the `NOT IN` set. The confirmation is required when an OCR ticket contains either selection; the image itself remains browser-local.
+- The screenshot JSON carries `listed_scores` and `listed_scores_verified` separately from selected tickets. The backend persists both fields, migrates existing SQLite databases additively, and only uses a verified list. Old/manual JSON without a screenshot list keeps the standard JCZQ option fallback.
+- Added backend regression cases for exact scores included/excluded from the per-screenshot list, alias handling, list validation, and task persistence. Added OCR parser and Worker proxy tests for list extraction, editing controls, and metadata forwarding.
+- Verification: Python source/test syntax and 10 isolated settlement/validation smoke checks passed; Node parser/Site Worker tests passed (`27/27`); the Site source Worker suite passed (`14/14`); `npm run build`, `npm run validate`, and `git diff --check` passed. The full Python/FastAPI pytest suite could not run in this environment because `pytest`, `fastapi`, and `httpx` are not installed. Browser OCR was not exercised against a real screenshot.
+- Owner-private ChatGPT Site version 16 deployed successfully at https://wellmax-match-monitor.letnek-majun.chatgpt.site. The Site refuses to create screenshot-based “other score” tasks unless `/api/health` advertises `screenshot_score_lists`.
+- The amstd backend has not been changed in this update. Pull this commit and restart only `sportsmatch-web.service` before using screenshot-based “胜其它／负其它” settlement. `napoli-monitor.service` was not accessed or changed; no secrets, screenshot, or private betting record were committed.

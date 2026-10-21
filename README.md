@@ -13,6 +13,7 @@ The dashboard is published as an owner-private ChatGPT Site. Its always-on sched
 - Show upcoming tasks first in kickoff-time order; hide finished matches 24 hours after the backend first confirms their terminal result
 - Import/export ticket JSON; support `胜平负`, `让球胜平负`, 31 correct-score selections including `胜其他`, `平其他`, `负其他` and the equivalent `其它` spellings, `总进球`, and `半全场`
 - Simulate manually by market, or upload a NetEase Betting Assistant screenshot for browser-local OCR across markets; review each selection and SP, then balance a shared ¥2-unit budget
+- Build a per-screenshot list of every recognized exact-score option with SP, separate from the user's selected bets; `胜其它`/`负其它` settle only when the final score is not in that confirmed list
 - Show live scores separately from the 90-minute settlement score so extra time and penalties do not change JCZQ results
 - Check scores on a persistent SQLite-backed schedule; Telegram alerts at first check, score changes, and full time
 - HTTP Basic authentication; API keys only from server environment variables
@@ -24,4 +25,4 @@ ChatGPT Sites can be evaluated for the frontend, but this Python background sche
 
 ## ChatGPT Site
 
-The owner-private Sites dashboard lives under `site/`; see SITES.md and TEST_REPORT.md. Screenshot OCR runs in the user's browser and only sends the reviewed ticket JSON to the backend; the screenshot itself is not uploaded. OCR engine and Chinese language data are downloaded from the configured CDN on first use. Confirm every parsed market, selection and SP before exporting. The backend does not scrape NetEase or fetch official odds. After backend changes, follow DEPLOY.md to restart only `sportsmatch-web.service`.
+The owner-private Sites dashboard lives under `site/`; see SITES.md and TEST_REPORT.md. Screenshot OCR runs in the user's browser and only sends the reviewed ticket JSON and confirmed exact-score SP list to the backend; the screenshot itself is not uploaded. The editable list is built from all recognized exact-score/SP candidates, not only selected bets. OCR engine and Chinese language data are downloaded from the configured CDN on first use. Confirm every parsed market, selection, SP and (when using an “other” score bet) the complete exact-score list before exporting. The backend does not scrape NetEase or fetch official odds. After backend changes, follow DEPLOY.md to restart only `sportsmatch-web.service`.

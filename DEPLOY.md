@@ -95,8 +95,8 @@ curl --fail-with-body -sS --user matchmonitor https://sportsmatch.sendmymail.top
 curl --fail-with-body -sS --user matchmonitor https://sportsmatch.sendmymail.top/api/health
 ```
 
-`curl` 会提示输入服务密码；不要把密码贴到聊天中。新增 `/ocr-parser.js` 和 `/ocr-ui.js` 两个受 HTTP Basic 保护的路由。两个脚本及 `/api/health` 都应返回 HTTP 200。任务列表更新会为既有 SQLite 数据库添加 `finished_at` 字段，并用原有 `last_check` 回填已完赛任务，不会删除任务或投注数据。未来开赛且等待/暂停中的比赛按开始时间升序显示；后台首次确认完赛满 24 小时后，该任务会从列表隐藏。现有 Site 已按后台返回顺序显示任务，无需为这项规则重新部署 Site。任何情况下都不要停止、重启、覆盖或修改 `napoli-monitor.service`。
+`curl` 会提示输入服务密码；不要把密码贴到聊天中。新增 `/ocr-parser.js` 和 `/ocr-ui.js` 两个受 HTTP Basic 保护的路由。两个脚本及 `/api/health` 都应返回 HTTP 200。任务列表更新会为既有 SQLite 数据库添加 `finished_at` 字段，并用原有 `last_check` 回填已完赛任务；本次版本还会新增 `listed_scores_json` 与 `listed_scores_verified` 字段，不会删除任务或投注数据。截图识别导出的投注 JSON 会另附完整的带 SP 精确比分清单；选择“胜其它／负其它”时，需确认清单完整，后台才按“终场比分不在清单中”判定是否命中。没有截图清单的旧 JSON 继续使用标准竞彩比分表兼容结算。未来开赛且等待/暂停中的比赛按开始时间升序显示；后台首次确认完赛满 24 小时后，该任务会从列表隐藏。任何情况下都不要停止、重启、覆盖或修改 `napoli-monitor.service`。
 
-截图仅在浏览器本地处理，不会提交给 Sites Worker、FastAPI 或 API-Football。浏览器首次识别需联网下载固定版本的 Tesseract.js OCR 引擎和中文模型；CDN 不可用时可手动填写。用户需要逐项核对 OCR 给出的玩法、选项和 SP。
+截图仅在浏览器本地处理，不会提交给 Sites Worker、FastAPI 或 API-Football。浏览器首次识别需联网下载固定版本的 Tesseract.js OCR 引擎和中文模型；CDN 不可用时可手动填写。用户需要逐项核对 OCR 给出的玩法、选项、SP，以及用于“其他”判定的完整精确比分 SP 清单。服务端自动迁移新增 SQLite 字段；完成拉取后只重启 `sportsmatch-web.service`。不要改动 `napoli-monitor.service`。
 
 The backend was configured and the user confirmed the previous release is active with the poller enabled. Pull this release and restart only `sportsmatch-web.service` to serve the OCR assets and apply the task retention/order behavior. See TEST_REPORT.md for verification and remaining live checks.

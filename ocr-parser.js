@@ -4,7 +4,9 @@
   const listedWins = ["1:0", "2:0", "2:1", "3:0", "3:1", "3:2", "4:0", "4:1", "4:2", "5:0", "5:1", "5:2"];
   const listedDraws = ["0:0", "1:1", "2:2", "3:3"];
   const listedLosses = listedWins.map((score) => score.split(":").reverse().join(":"));
-  const scoreOptions = new Set([...listedWins, ...listedDraws, ...listedLosses,
+  const listedScoreOptions = new Set([...listedWins, ...listedDraws, ...listedLosses]);
+  const listedScoreOrder = [...listedWins, ...listedDraws, ...listedLosses];
+  const scoreOptions = new Set([...listedScoreOptions,
     "胜其他", "平其他", "负其他", "胜其它", "平其它", "负其它"]);
   const resultOptions = new Set(["胜", "平", "负"]);
   const halfFullOptions = new Set(["胜胜", "胜平", "胜负", "平胜", "平平", "平负", "负胜", "负平", "负负"]);
@@ -234,6 +236,24 @@
     if (!Number.isFinite(odds) || odds < 1) return { ok: false, reason: "SP须为大于或等于1的数字" };
     if (market === "handicap" && (pick?.handicap === null || pick?.handicap === undefined || pick?.handicap === "" || !Number.isInteger(Number(pick.handicap)) || Number(pick.handicap) < -9 || Number(pick.handicap) > 9)) return { ok: false, reason: "让球数须为-9到9的整数" };
     return { ok: true, reason: "有效" };
+  }
+
+  function listedScoresFromRows(rows) {
+    const found = new Set((rows || []).flatMap((row) => {
+      const score = normalize(row?.selection);
+      const odds = row?.odds;
+      return row?.market === "correct_score" && listedScoreOptions.has(score)
+        && odds !== null && odds !== undefined && odds !== "" && Number.isFinite(Number(odds)) && Number(odds) >= 1
+        ? [score] : [];
+    }));
+    return listedScoreOrder.filter((score) => found.has(score));
+  }
+
+  function parseListedScores(value) {
+    const raw = Array.isArray(value) ? value.join(",") : String(value ?? "");
+    const scores = [...new Set(raw.split(/[,，、;；\s]+/).map(normalize).filter(Boolean))];
+    const invalid = scores.filter((score) => !listedScoreOptions.has(score));
+    return { ok: invalid.length === 0, scores, invalid };
   }
 
   function isDarkFillPixel(red, green, blue) {
@@ -542,5 +562,5 @@
     return data;
   }
 
-  root.MatchMonitorOCR = { parse, parseSelectedRegions, scoreSelectedCrop, marketAt, validatePick, normalize, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels };
+  root.MatchMonitorOCR = { parse, parseSelectedRegions, scoreSelectedCrop, marketAt, validatePick, normalize, listedScoresFromRows, parseListedScores, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels };
 })(globalThis);

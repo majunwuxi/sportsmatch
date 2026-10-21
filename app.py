@@ -25,7 +25,8 @@ TERMINAL={"FT","AET","PEN","CANC","ABD","AWD","WO"}
 VOID={"CANC","ABD","AWD","WO"}
 LISTED_DRAWS={"0:0","1:1","2:2","3:3"}
 LISTED_LOSSES={":".join(reversed(x.split(":"))) for x in LISTED_WINS}
-SCORES=LISTED_WINS | LISTED_DRAWS | LISTED_LOSSES | {"胜其他","平其他","负其他","胜其它","平其它","负其它"}
+LISTED_SCORE_OPTIONS=LISTED_WINS | LISTED_DRAWS | LISTED_LOSSES
+SCORES=LISTED_SCORE_OPTIONS | {"胜其他","平其他","负其他","胜其它","平其它","负其它"}
 OTHER_SCORE_ALIASES={"胜其它":"胜其他","平其它":"平其他","负其它":"负其他"}
 MARKETS={"correct_score":"比分","match_result":"胜平负","handicap":"让球胜平负","total_goals":"总进球","half_full":"半全场"}
 RESULTS={"胜","平","负"}
@@ -60,6 +61,10 @@ def init_db():
         );
         """)
         columns={r[1] for r in c.execute("PRAGMA table_info(tasks)")}
+        if "listed_scores_json" not in columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN listed_scores_json TEXT")
+        if "listed_scores_verified" not in columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN listed_scores_verified INTEGER NOT NULL DEFAULT 0")
         if "settlement_score" not in columns:
             c.execute("ALTER TABLE tasks ADD COLUMN settlement_score TEXT")
             c.execute("UPDATE tasks SET settlement_score=last_score WHERE settlement_score IS NULL")
@@ -113,15 +118,16 @@ def notify(message):
 def score_result(home,away):
     return "胜" if home>away else "负" if home<away else "平"
 
-def score_category(home,away):
+def score_category(home,away,listed_scores=None):
     score=f"{home}:{away}"
-    return score if score in SCORES else ("胜其他" if home>away else "负其他" if home<away else "平其他")
+    exact_scores=LISTED_SCORE_OPTIONS if listed_scores is None else set(listed_scores)
+    return score if score in exact_scores else ("胜其他" if home>away else "负其他" if home<away else "平其他")
 
-def ticket_matches(ticket,home,away,half_home=None,half_away=None):
+def ticket_matches(ticket,home,away,half_home=None,half_away=None,listed_scores=None):
     if home is None or away is None: return None
     market=ticket.get("market","correct_score")
     selection=ticket["selection"]
-    if market=="correct_score": return OTHER_SCORE_ALIASES.get(selection,selection)==score_category(home,away)
+    if market=="correct_score": return OTHER_SCORE_ALIASES.get(selection,selection)==score_category(home,away,listed_scores)
     if market=="match_result": return selection==score_result(home,away)
     if market=="handicap": return selection==score_result(home+int(ticket["handicap"]),away)
     if market=="total_goals": return selection==("7+" if home+away>=7 else str(home+away))
@@ -130,22 +136,24 @@ def ticket_matches(ticket,home,away,half_home=None,half_away=None):
         return selection==score_result(half_home,half_away)+score_result(home,away)
     return False
 
-def outcome(home,away,tickets,half_home=None,half_away=None):
+def outcome(home,away,tickets,half_home=None,half_away=None,listed_scores=None):
     total=sum((Decimal(str(t["stake"])) for t in tickets), Decimal(0))
     payout=Decimal(0)
     rows=[]
     for index,t in enumerate(tickets):
         stake=Decimal(str(t["stake"]))
-        won=ticket_matches(t,home,away,half_home,half_away)
+        won=ticket_matches(t,home,away,half_home,half_away,listed_scores)
         amount=stake*Decimal(str(t["odds"])) if won else Decimal(0)
         payout+=amount
         rows.append({"index":index,"market":t.get("market","correct_score"),"market_label":MARKETS.get(t.get("market","correct_score"),"未知玩法"),
             "selection":t["selection"],"handicap":t.get("handicap"),"stake":float(stake),"share_pct":float((stake*100/total).quantize(Decimal("0.01"),rounding=ROUND_HALF_UP)) if total else 0,
             "odds":float(t["odds"]),"won":won,"payout":float(amount.quantize(Decimal("0.01"),rounding=ROUND_HALF_UP))})
     money=lambda n:float(n.quantize(Decimal("0.01"),rounding=ROUND_HALF_UP))
-    selection=score_category(home,away) if home is not None and away is not None else None
+    selection=score_category(home,away,listed_scores) if home is not None and away is not None else None
     has_score=home is not None and away is not None
     return {"selection":selection,"payout":money(payout),"net":money(payout-total) if has_score else None,"total":money(total),"tickets":rows,"has_score":has_score,
+        "score_list_source":"截图SP识别清单" if listed_scores is not None else "标准竞彩比分表",
+        "listed_scores_count":len(listed_scores) if listed_scores is not None else len(LISTED_SCORE_OPTIONS),
         "halftime_score":f"{half_home}:{half_away}" if half_home is not None and half_away is not None else None,
         "pending_tickets":sum(1 for row in rows if row["won"] is None)}
 
@@ -176,7 +184,8 @@ def tick(task):
     now=datetime.now(timezone.utc)
     next_at=(now+timedelta(minutes=task["interval_minutes"])).isoformat()
     ticket=json.loads(task["ticket_json"])
-    result=outcome(settle_h,settle_a,ticket,half_h,half_a)
+    listed_scores=json.loads(task["listed_scores_json"]) if task.get("listed_scores_json") and task.get("listed_scores_verified") else None
+    result=outcome(settle_h,settle_a,ticket,half_h,half_a,listed_scores)
     if status in VOID: result={"selection":None,"payout":0,"net":0,"total":result["total"],"review_required":True}
     calc=(f"按常规90分钟比分 {regulation_score} 试算：返奖 ¥{result.get('payout',0):.2f}，净利润 ¥{result.get('net',0):.2f}" if result.get("has_score") else "比分尚未产生，暂不结算")
     message=f"{'🏁 比赛结束' if closed else '⚽ 赛况更新'}\n{home} {score or '—'} {away}\n状态：{STATUS_CN.get(status,status)}\n{calc}"
@@ -256,6 +265,13 @@ class TaskIn(BaseModel):
     start_at:str
     interval_minutes:int=Field(default=10,ge=1,le=120)
     tickets:list[Ticket]=Field(default_factory=list,max_length=1000)
+    listed_scores:list[str]|None=None
+    listed_scores_verified:bool=False
+
+class TicketUpdateIn(BaseModel):
+    tickets:list[Ticket]=Field(max_length=1000)
+    listed_scores:list[str]|None=None
+    listed_scores_verified:bool|None=None
 
 def validate_tickets(items):
     if len(items)>1000: raise HTTPException(422,"Too many tickets")
@@ -267,9 +283,29 @@ def validate_tickets(items):
         if Decimal(str(t.stake))%Decimal("2"): raise HTTPException(422,"Stake must be a positive multiple of ¥2")
     return [t.model_dump() for t in items]
 
+def validate_listed_scores(items):
+    if items is None: return None
+    if len(items)>len(LISTED_SCORE_OPTIONS): raise HTTPException(422,"Too many listed correct-score options")
+    result=[]
+    for item in items:
+        score=str(item).strip().replace("：",":").replace(" ","")
+        if score not in LISTED_SCORE_OPTIONS: raise HTTPException(422,f"Invalid listed correct-score option: {item}")
+        if score not in result: result.append(score)
+    return result
+
+def validate_score_metadata(tickets,listed_scores,verified):
+    has_other=any(t.get("market","correct_score")=="correct_score"
+        and OTHER_SCORE_ALIASES.get(t["selection"],t["selection"]) in {"胜其他","平其他","负其他"}
+        for t in tickets)
+    if verified and listed_scores is None: raise HTTPException(422,"A verified screenshot score list is required")
+    if has_other and listed_scores is not None and not verified:
+        raise HTTPException(422,"Confirm the screenshot SP score list before using 胜其它/负其它")
+    if has_other and listed_scores == []:
+        raise HTTPException(422,"The screenshot SP score list is empty; add the recognized exact scores first")
+
 @app.get("/api/health")
 def health(_:str=Depends(auth)):
-    return {"ok":True,"poller":POLL_ENABLED,"timezone":"Asia/Shanghai"}
+    return {"ok":True,"poller":POLL_ENABLED,"timezone":"Asia/Shanghai","screenshot_score_lists":True}
 
 @app.get("/api/fixtures")
 def fixtures(date:str=Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),q:str="",_:str=Depends(auth)):
@@ -309,10 +345,14 @@ def tasks(_:str=Depends(auth)):
     rows=upcoming+visible
     for x in rows:
         x["tickets"]=json.loads(x.pop("ticket_json"))
+        listed_scores_raw=x.pop("listed_scores_json",None)
+        x["listed_scores"]=json.loads(listed_scores_raw) if listed_scores_raw else None
+        x["listed_scores_verified"]=bool(x.pop("listed_scores_verified",0))
         parts=(x.get("settlement_score") or x["last_score"] or "").split(":")
         half=(x.get("half_score") or "").split(":")
+        verified_scores=x["listed_scores"] if x["listed_scores_verified"] else None
         x["settlement"]=outcome(*(map(int,parts) if len(parts)==2 and all(p.isdigit() for p in parts) else [None,None]),x["tickets"],
-            *(map(int,half) if len(half)==2 and all(p.isdigit() for p in half) else [None,None]))
+            *(map(int,half) if len(half)==2 and all(p.isdigit() for p in half) else [None,None]),verified_scores)
         x["settlement"]["final"]=x["status"]=="finished"
         x["status_cn"]=TASK_STATUS_CN.get(x["status"],x["status"])
 
@@ -321,6 +361,8 @@ def tasks(_:str=Depends(auth)):
 @app.post("/api/tasks")
 def create_task(data:TaskIn,_:str=Depends(auth)):
     tickets=validate_tickets(data.tickets)
+    listed_scores=validate_listed_scores(data.listed_scores)
+    validate_score_metadata(tickets,listed_scores,data.listed_scores_verified)
     try:
         start=datetime.fromisoformat(data.start_at)
         if start.tzinfo is None:raise ValueError()
@@ -334,17 +376,31 @@ def create_task(data:TaskIn,_:str=Depends(auth)):
     next_at=max(start.astimezone(timezone.utc).isoformat(),now)
     with conn() as c:
         try:
-            cur=c.execute("""INSERT INTO tasks(fixture_id,home,away,kickoff,start_at,interval_minutes,next_check,ticket_json,created_at)
-             VALUES (?,?,?,?,?,?,?,?,?)""",(data.fixture_id,home,away,fixture["fixture"]["date"],start.isoformat(),data.interval_minutes,next_at,json.dumps(tickets,ensure_ascii=False),now))
+            cur=c.execute("""INSERT INTO tasks(fixture_id,home,away,kickoff,start_at,interval_minutes,next_check,ticket_json,listed_scores_json,listed_scores_verified,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?)""",(data.fixture_id,home,away,fixture["fixture"]["date"],start.isoformat(),data.interval_minutes,next_at,json.dumps(tickets,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(data.listed_scores_verified),now))
         except sqlite3.IntegrityError:raise HTTPException(409,"Fixture already monitored")
     return {"id":cur.lastrowid,"home":home,"away":away}
 
 @app.put("/api/tasks/{task_id}/tickets")
-def update_tickets(task_id:int,tickets:list[Ticket],_:str=Depends(auth)):
+def update_tickets(task_id:int,data:list[Ticket]|TicketUpdateIn,_:str=Depends(auth)):
+    tickets=data if isinstance(data,list) else data.tickets
     values=validate_tickets(tickets)
     with conn() as c:
-        r=c.execute("UPDATE tasks SET ticket_json=? WHERE id=?",(json.dumps(values,ensure_ascii=False),task_id))
-        if not r.rowcount:raise HTTPException(404,"Task not found")
+        existing=c.execute("SELECT listed_scores_json,listed_scores_verified FROM tasks WHERE id=?",(task_id,)).fetchone()
+        if not existing:raise HTTPException(404,"Task not found")
+        if isinstance(data,list):
+            listed_scores=json.loads(existing["listed_scores_json"]) if existing["listed_scores_json"] else None
+            verified=bool(existing["listed_scores_verified"])
+        else:
+            if data.listed_scores is None:
+                listed_scores=json.loads(existing["listed_scores_json"]) if existing["listed_scores_json"] else None
+                verified=bool(existing["listed_scores_verified"]) if data.listed_scores_verified is None else data.listed_scores_verified
+            else:
+                listed_scores=validate_listed_scores(data.listed_scores)
+                verified=bool(data.listed_scores_verified)
+        validate_score_metadata(values,listed_scores,verified)
+        c.execute("UPDATE tasks SET ticket_json=?,listed_scores_json=?,listed_scores_verified=? WHERE id=?",
+            (json.dumps(values,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(verified),task_id))
     return {"ok":True,"tickets":len(values)}
 
 @app.post("/api/tasks/{task_id}/{action}")

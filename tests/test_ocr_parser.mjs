@@ -70,6 +70,24 @@ test('normalizes full-width screenshot text and rejects invalid SP/selection com
   assert.equal(parser.validatePick({ market: 'handicap', selection: '平', handicap: 10, odds: 2 }).ok, false);
 });
 
+test('builds the other-score exclusion set from every recognized exact score with SP', () => {
+  const rows = [
+    { market: 'correct_score', selection: '5:2', odds: 18, highlighted: false },
+    { market: 'correct_score', selection: '5:2', odds: 18, highlighted: true },
+    { market: 'correct_score', selection: '0:1', odds: 7.5, highlighted: true },
+    { market: 'correct_score', selection: '负其它', odds: 29, highlighted: true },
+    { market: 'correct_score', selection: '4:1', odds: null, highlighted: false },
+    { market: 'match_result', selection: '胜', odds: 2.3, highlighted: false },
+  ];
+  assert.deepEqual(JSON.stringify(parser.listedScoresFromRows(rows)), JSON.stringify(['5:2', '0:1']));
+  assert.deepEqual(JSON.stringify(parser.parseListedScores('5：2、0:1, 5:2\n2:0')), JSON.stringify({
+    ok: true, scores: ['5:2', '0:1', '2:0'], invalid: [],
+  }));
+  const invalid = parser.parseListedScores('5:2,负其它');
+  assert.equal(invalid.ok, false);
+  assert.deepEqual(JSON.stringify(invalid.invalid), JSON.stringify(['负其它']));
+});
+
 test('detects dark selected cells, filters a full-width button, and inverts white text for OCR', () => {
   const width = 240, height = 160;
   const pixels = new Uint8ClampedArray(width * height * 4);
