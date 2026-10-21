@@ -305,6 +305,8 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert '请选择项目、核对SP并分配金额。' in html
     assert 'expandedBetTaskIds' in html and '展开投注' in html and 'aria-expanded' in html
     assert 'const finished=t.status==="finished"' in html and 'b.disabled=finished' in html
+    assert '.task.task-finished{background:#fff7d6' in html
+    assert 'box.className="task"+(t.status==="finished"?" task-finished":"")' in html
     ui=(m.Path(__file__).parents[1]/'ocr-ui.js').read_text(encoding='utf-8')
     assert 'Number($("ocrBudget").value)' in ui and 'hasRecognizedSelections' in ui
     assert '$("ocrSelectedTotal").textContent = money(total)' in ui

@@ -175,3 +175,8 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Verification: Node OCR parser and Sites Worker tests `41/41`, including DOM section order and responsive layout assertions. JavaScript syntax checks, Python compile, inline dashboard script syntax, and `git diff --check` passed. The targeted Python test could not run because `pytest` is not installed.
 - Owner-only ChatGPT Site version 24 deployed successfully at https://bm.sendmymail.top and https://wellmax-match-monitor.letnek-majun.chatgpt.site. The connected custom domain and TLS status are active; the access allowlist contains only the owner. Site source commit: `e92a33d2df248d6e5816a8cc076b55d07ef49087`.
 - `sportsmatch.sendmymail.top` is a separate amstd backend/frontend deployment and was not remotely changed in this update. No API key, Telegram token, betting data, or server credentials were included.
+
+## 2026-10-21 — Highlight finished monitoring tasks
+
+- Finished task cards now receive a pale yellow background with a light gold border and rounded inset spacing. The style is applied by task status; active tasks keep their existing appearance and finished-task controls remain disabled.
+- Verification: Node OCR parser and Sites Worker tests `42/42`, including assertions for status-driven styling and disabled actions. JavaScript syntax checks, Python compile, and `git diff --check` passed. The targeted Python test could not run because `pytest` is not installed.
