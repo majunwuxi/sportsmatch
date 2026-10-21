@@ -69,7 +69,7 @@ ssh -L 8765:127.0.0.1:8765 root@YOUR_SERVER
 - SQLite 默认路径 `/opt/sportsmatch/data/matches.sqlite3`。
 - 创建任务时将查询一次比赛进行校验；搜索同样消耗 API 配额。
 - 查询频率不保证API实时刷新频率，比分是第三方数据，无法保障彩票奖金结算。
-- 当前支持竞彩足球单场**比分**玩法选项集合；不处理串关、让球胜平负及退款。
+- 当前处理竞彩足球单场的胜平负、让球胜平负、比分（31项）、总进球和半全场结果；不处理串关，也不自动裁定退款。
 - 当前支持一场比赛关联一组投注记录；同场多组投注需在后续增加组合层。
 - 终场状态后任务自动停止；取消和腰斩也会终止轮询并提醒。
 - 当前新平台与原脚本是**两套完全独立的服务**。未来迁移需经测试确认，不能并行对同一比赛重复轮询。
@@ -80,4 +80,20 @@ Use the new independent backend only; do not alter the legacy service. Configure
 
 Set Sites `BACKEND_URL`, `BACKEND_USER`, `BACKEND_PASSWORD` as runtime secrets, then deploy the saved Site version again. Never enter these into frontend code. Python dependencies for verification: `pip install pytest httpx`; run `python -m pytest -q` and `node --test site/worker/test.mjs`.
 
-Production acceptance is pending until a new backend is independently installed and real provider/Telegram tests pass. See TEST_REPORT.md.
+### 更新现有的独立后台
+
+Match Monitor 的 Python 后台在 `/opt/sportsmatch`，与 Napoli 旧服务隔离。拉取新代码前先检查工作区；保留 `.env`、SQLite 数据库和其他本地改动。只重启新服务 `sportsmatch-web.service`：
+
+```bash
+cd /opt/sportsmatch
+sudo git status --short
+sudo git pull --ff-only origin main
+sudo .venv/bin/pip install -r requirements.txt
+sudo systemctl restart sportsmatch-web.service
+sudo systemctl is-active sportsmatch-web.service
+curl --fail-with-body -sS --user matchmonitor https://sportsmatch.sendmymail.top/api/health
+```
+
+`curl` 会提示输入服务密码。更新会在启动时给 SQLite 添加兼容列，不会删除现有任务或投注数据。确认服务恢复后，再用非敏感的竞彩票样本测试各玩法结算和 Telegram 通知。任何情况下都不要停止、重启、覆盖或修改 `napoli-monitor.service`。
+
+The independent backend was already configured and its authenticated health check succeeded. This release still requires the upgrade above before the newly added settlement markets become available through the live API. See TEST_REPORT.md for verification and remaining live checks.

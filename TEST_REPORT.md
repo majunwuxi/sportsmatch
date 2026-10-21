@@ -31,3 +31,13 @@ No amstd connection was made and no existing service was stopped, restarted, ove
 Production logs identified `redirect: error` as unsupported by the edge runtime. Replaced it with `manual` and explicit 3xx rejection, preserving the restriction against forwarding credentials to redirect destinations. Added UTF-8 Basic encoding, a portable timeout controller and redacted failure diagnostics. Owner-private platform service access can probe `/api/health`; user records still require authenticated visitor identity.
 
 Worker tests: 8 passed, including edge redirect compatibility and rejection of upstream redirects. Real backend connection verification is recorded in the deployment handoff.
+
+## 2026-10-21 — Multi-market settlement and simulator
+
+- Backend suite: `22 passed` with pytest. It covers all five single-match markets, half/full-time settlement, `7+` total goals, handicap adjustment, legacy correct-score JSON, 90-minute settlement during extra time, Chinese status labels, per-ticket stake/share/payout breakdown, and suppressing repeated no-score Telegram notices.
+- Frontend JavaScript: `node --check` passed.
+- Sites Worker build, ESM artifact validation, and proxy/UI suite: `8 passed`. The tests cover the new simulator and JSON actions, private visitor checks, same-origin writes, route allowlisting, credentials kept server-side, UTF-8 Basic auth, and redirect rejection.
+- Sites deployment: private version 5 succeeded at https://wellmax-match-monitor.letnek-majun.chatgpt.site.
+- Simulator allocation was checked against the screenshot example (SP 13, 17, 24, 41, 55, 60, 19; budget ¥124): it allocates ¥32, ¥26, ¥18, ¥10, ¥8, ¥8, and ¥22 respectively, with gross returns ¥416, ¥442, ¥432, ¥410, ¥440, ¥480, and ¥418.
+
+The live backend was previously configured and its authenticated health probe succeeded with the poller enabled. The new backend source still needs to be pulled and `sportsmatch-web.service` restarted as documented in DEPLOY.md. Until that step, the newly added markets are not active through the production API. This release did not trigger a real API-Football fixture update or Telegram message. No credentials or private betting data were added to the repository. The existing Napoli service was not accessed or changed.

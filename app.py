@@ -26,6 +26,12 @@ VOID={"CANC","ABD","AWD","WO"}
 LISTED_DRAWS={"0:0","1:1","2:2","3:3"}
 LISTED_LOSSES={":".join(reversed(x.split(":"))) for x in LISTED_WINS}
 SCORES=LISTED_WINS | LISTED_DRAWS | LISTED_LOSSES | {"胜其他","平其他","负其他"}
+MARKETS={"correct_score":"比分","match_result":"胜平负","handicap":"让球胜平负","total_goals":"总进球","half_full":"半全场"}
+RESULTS={"胜","平","负"}
+HALF_FULL={a+b for a in RESULTS for b in RESULTS}
+TOTAL_GOALS={"0","1","2","3","4","5","6","7+"}
+STATUS_CN={"TBD":"待定","NS":"未开赛","1H":"上半场","HT":"中场休息","2H":"下半场","ET":"加时赛","BT":"加时赛休息","P":"点球大战","SUSP":"暂停","INT":"中断","FT":"完场","AET":"加时赛结束","PEN":"点球结束","PST":"延期","CANC":"已取消","ABD":"比赛中止","AWD":"判定赛果","WO":"弃权"}
+TASK_STATUS_CN={"pending":"等待开始","running":"监测中","paused":"已暂停","stopped":"已停止","finished":"已完赛","review_required":"待人工确认"}
 
 def conn():
     c=sqlite3.connect(DB, timeout=15)
@@ -52,6 +58,14 @@ def init_db():
           utc_day TEXT PRIMARY KEY, requests INTEGER NOT NULL DEFAULT 0
         );
         """)
+        columns={r[1] for r in c.execute("PRAGMA table_info(tasks)")}
+        if "settlement_score" not in columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN settlement_score TEXT")
+            c.execute("UPDATE tasks SET settlement_score=last_score WHERE settlement_score IS NULL")
+        if "half_score" not in columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN half_score TEXT")
+        if "provider_status" not in columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN provider_status TEXT")
 
 def auth(credentials:HTTPBasicCredentials=Depends(BASIC)):
     username=os.getenv("ADMIN_USER","")
@@ -92,15 +106,44 @@ def notify(message):
     out=request_json("https://api.telegram.org/bot"+token+"/sendMessage",post={"chat_id":chat,"text":message})
     if not out.get("ok"): raise RuntimeError("Telegram sendMessage failed")
 
-def outcome(home,away,tickets):
+def score_result(home,away):
+    return "胜" if home>away else "负" if home<away else "平"
+
+def score_category(home,away):
+    score=f"{home}:{away}"
+    return score if score in SCORES else ("胜其他" if home>away else "负其他" if home<away else "平其他")
+
+def ticket_matches(ticket,home,away,half_home=None,half_away=None):
+    if home is None or away is None: return None
+    market=ticket.get("market","correct_score")
+    selection=ticket["selection"]
+    if market=="correct_score": return selection==score_category(home,away)
+    if market=="match_result": return selection==score_result(home,away)
+    if market=="handicap": return selection==score_result(home+int(ticket["handicap"]),away)
+    if market=="total_goals": return selection==("7+" if home+away>=7 else str(home+away))
+    if market=="half_full":
+        if half_home is None or half_away is None: return None
+        return selection==score_result(half_home,half_away)+score_result(home,away)
+    return False
+
+def outcome(home,away,tickets,half_home=None,half_away=None):
     total=sum((Decimal(str(t["stake"])) for t in tickets), Decimal(0))
-    selection=None
-    if home is not None and away is not None:
-        score=f"{home}:{away}"
-        selection=score if score in SCORES else ("胜其他" if home>away else "负其他" if home<away else "平其他")
-    payout=sum((Decimal(str(t["stake"]))*Decimal(str(t["odds"])) for t in tickets if t["selection"]==selection),Decimal(0))
+    payout=Decimal(0)
+    rows=[]
+    for index,t in enumerate(tickets):
+        stake=Decimal(str(t["stake"]))
+        won=ticket_matches(t,home,away,half_home,half_away)
+        amount=stake*Decimal(str(t["odds"])) if won else Decimal(0)
+        payout+=amount
+        rows.append({"index":index,"market":t.get("market","correct_score"),"market_label":MARKETS.get(t.get("market","correct_score"),"未知玩法"),
+            "selection":t["selection"],"handicap":t.get("handicap"),"stake":float(stake),"share_pct":float((stake*100/total).quantize(Decimal("0.01"),rounding=ROUND_HALF_UP)) if total else 0,
+            "odds":float(t["odds"]),"won":won,"payout":float(amount.quantize(Decimal("0.01"),rounding=ROUND_HALF_UP))})
     money=lambda n:float(n.quantize(Decimal("0.01"),rounding=ROUND_HALF_UP))
-    return {"selection":selection,"payout":money(payout),"net":money(payout-total),"total":money(total)}
+    selection=score_category(home,away) if home is not None and away is not None else None
+    has_score=home is not None and away is not None
+    return {"selection":selection,"payout":money(payout),"net":money(payout-total) if has_score else None,"total":money(total),"tickets":rows,"has_score":has_score,
+        "halftime_score":f"{half_home}:{half_away}" if half_home is not None and half_away is not None else None,
+        "pending_tickets":sum(1 for row in rows if row["won"] is None)}
 
 def tick(task):
     fid=task["fixture_id"]
@@ -111,26 +154,40 @@ def tick(task):
     home=f["teams"]["home"]["name"]
     away=f["teams"]["away"]["name"]
     if home!=task["home"] or away!=task["away"]:raise RuntimeError("Team mismatch")
-    h=f["goals"]["home"]; a=f["goals"]["away"]
-    if f["fixture"]["status"]["short"] in {"ET","BT","AET","PEN"}:
-        h=f["score"]["fulltime"]["home"]; a=f["score"]["fulltime"]["away"]
-    score=f"{h}:{a}"
     status=f["fixture"]["status"]["short"]
+    goals=f.get("goals") or {}
+    h=goals.get("home"); a=goals.get("away")
+    score=f"{h}:{a}" if h is not None and a is not None else None
+    ft=(f.get("score") or {}).get("fulltime") or {}
+    if status in {"ET","BT","P","AET","PEN"}:
+        if ft.get("home") is None or ft.get("away") is None:
+            raise RuntimeError("Regular-time score unavailable from provider")
+        settle_h,settle_a=ft["home"],ft["away"]
+    else:
+        settle_h,settle_a=h,a
+    regulation_score=f"{settle_h}:{settle_a}" if settle_h is not None and settle_a is not None else None
+    half=(f.get("score") or {}).get("halftime") or {}
+    half_h,half_a=half.get("home"),half.get("away")
     closed=status in TERMINAL
     now=datetime.now(timezone.utc)
     next_at=(now+timedelta(minutes=task["interval_minutes"])).isoformat()
     ticket=json.loads(task["ticket_json"])
-    result=outcome(h,a,ticket)
+    result=outcome(settle_h,settle_a,ticket,half_h,half_a)
     if status in VOID: result={"selection":None,"payout":0,"net":0,"total":result["total"],"review_required":True}
-    message=(f"{'🏁 终场' if closed else '⚽ 赛况更新'}\n{home} {score} {away}\n状态：{status}\n"
-       +f"当前票项：{result['selection'] or '未覆盖'}，若此时结算净额：¥{result.get('net',0)}")
-    if status in VOID: message="比赛中断/取消或异常终止："+home+" vs "+away+"，状态 "+status+"。请根据官方公告人工确认退款或结算，平台不自动兑奖。"
-    if not closed:message+="\n仅为当前比分，并非最终中奖结果"
-    should_send=(task["last_score"] is None or task["last_score"]!=score or closed)
+    calc=(f"按常规90分钟比分 {regulation_score} 试算：返奖 ¥{result.get('payout',0):.2f}，净利润 ¥{result.get('net',0):.2f}" if result.get("has_score") else "比分尚未产生，暂不结算")
+    message=f"{'🏁 比赛结束' if closed else '⚽ 赛况更新'}\n{home} {score or '—'} {away}\n状态：{STATUS_CN.get(status,status)}\n{calc}"
+    winners=[r for r in result.get("tickets",[]) if r["won"] is True]
+    if winners: message+="\n命中投注："+"；".join(f"{r['market_label']} {r['selection']} ¥{r['stake']:g} → 返奖 ¥{r['payout']:.2f}" for r in winners)
+    elif result.get("pending_tickets"): message+="\n半全场投注等待半场比分数据"
+    else: message+="\n当前选择未命中"
+    if status in VOID: message="比赛中断/取消或异常终止："+home+" vs "+away+"，状态 "+STATUS_CN.get(status,status)+"。请根据官方公告人工确认退款或结算，平台不自动兑奖。"
+    elif not closed: message+="\n仅为当前比分试算，不代表最终中奖结果"
+    changed=task.get("last_score")!=score or task.get("provider_status")!=status
+    should_send=(changed and (score is not None or task.get("provider_status")!=status)) or closed
     if should_send: notify(message)
     with conn() as c:
-        c.execute("UPDATE tasks SET last_score=?,last_check=?,next_check=?,status=?,error=NULL WHERE id=? AND enabled=1 AND status IN ('pending','running')",
-             (score,now.isoformat(),next_at,"review_required" if status in VOID else "finished" if closed else "running",task["id"]))
+        c.execute("UPDATE tasks SET last_score=?,settlement_score=?,half_score=?,provider_status=?,last_check=?,next_check=?,status=?,error=NULL WHERE id=? AND enabled=1 AND status IN ('pending','running')",
+             (score,regulation_score,f"{half_h}:{half_a}" if half_h is not None and half_a is not None else None,status,now.isoformat(),next_at,"review_required" if status in VOID else "finished" if closed else "running",task["id"]))
 
 def poll_loop():
     while not STOP.wait(5):
@@ -181,8 +238,10 @@ async def guard(request:Request, call_next):
 
 class Ticket(BaseModel):
     selection:str
+    market:str="correct_score"
     stake:float=Field(gt=0,allow_inf_nan=False)
     odds:float=Field(ge=1,allow_inf_nan=False)
+    handicap:int|None=None
 
 class TaskIn(BaseModel):
     fixture_id:int=Field(gt=0)
@@ -196,8 +255,11 @@ class TaskIn(BaseModel):
 def validate_tickets(items):
     if len(items)>1000: raise HTTPException(422,"Too many tickets")
     for t in items:
-        if t.selection not in SCORES: raise HTTPException(422,f"Unsupported correct score: {t.selection}")
-        if t.stake%2: raise HTTPException(422,"Stake must be multiple of ¥2")
+        if t.market not in MARKETS: raise HTTPException(422,f"Unsupported market: {t.market}")
+        valid={"correct_score":t.selection in SCORES,"match_result":t.selection in RESULTS,"handicap":t.selection in RESULTS and t.handicap is not None and -9<=t.handicap<=9,
+            "total_goals":t.selection in TOTAL_GOALS,"half_full":t.selection in HALF_FULL}[t.market]
+        if not valid: raise HTTPException(422,f"Invalid selection for {MARKETS[t.market]}: {t.selection}")
+        if Decimal(str(t.stake))%Decimal("2"): raise HTTPException(422,"Stake must be a positive multiple of ¥2")
     return [t.model_dump() for t in items]
 
 @app.get("/api/health")
@@ -209,7 +271,7 @@ def fixtures(date:str=Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),q:str="",_:str=Depen
     matches=api("fixtures",{"date":date,"timezone":"Asia/Shanghai"})
     term=q.strip().casefold()
     return [{"id":x["fixture"]["id"],"home":x["teams"]["home"]["name"],"away":x["teams"]["away"]["name"],
-             "kickoff":x["fixture"]["date"],"status":x["fixture"]["status"]["short"]}
+             "kickoff":x["fixture"]["date"],"status":x["fixture"]["status"]["short"],"status_cn":STATUS_CN.get(x["fixture"]["status"]["short"],x["fixture"]["status"]["short"])}
              for x in matches if not term or term in x["teams"]["home"]["name"].casefold() or term in x["teams"]["away"]["name"].casefold()]
 
 @app.get("/api/tasks")
@@ -218,9 +280,12 @@ def tasks(_:str=Depends(auth)):
         rows=[dict(x) for x in c.execute("SELECT * FROM tasks ORDER BY created_at DESC")]
     for x in rows:
         x["tickets"]=json.loads(x.pop("ticket_json"))
-        parts=(x["last_score"] or "").split(":")
-        x["settlement"]=outcome(*(map(int,parts) if len(parts)==2 and all(p.isdigit() for p in parts) else [None,None]),x["tickets"])
+        parts=(x.get("settlement_score") or x["last_score"] or "").split(":")
+        half=(x.get("half_score") or "").split(":")
+        x["settlement"]=outcome(*(map(int,parts) if len(parts)==2 and all(p.isdigit() for p in parts) else [None,None]),x["tickets"],
+            *(map(int,half) if len(half)==2 and all(p.isdigit() for p in half) else [None,None]))
         x["settlement"]["final"]=x["status"]=="finished"
+        x["status_cn"]=TASK_STATUS_CN.get(x["status"],x["status"])
 
     return rows
 
