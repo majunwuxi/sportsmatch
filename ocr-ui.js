@@ -847,16 +847,11 @@
     try { balanceOcrPicks(); }
     catch (error) { setOcrStatus(error.message, true); }
   };
-  $("exportOcrJson").onclick = () => {
+  $("exportOcrJson").onclick = async () => {
     try {
       const payload = buildOcrPayload();
-      const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "match-monitor-bets.json";
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setOcrStatus("已导出所选投注 JSON，可在创建监测任务时直接粘贴文件内容。请再次核对投注项和SP。" );
+      await window.copyMatchMonitorText(JSON.stringify(payload, null, 2));
+      setOcrStatus("所选投注 JSON 已复制到本地剪贴板，可粘贴到监测任务投注框。请再次核对投注项和SP。" );
     } catch (error) { setOcrStatus(error.message, true); }
   };
   $("applyOcrJson").onclick = () => {
