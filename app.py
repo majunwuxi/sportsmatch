@@ -571,11 +571,15 @@ def fetch_team_logo(logo_url):
     except Exception as error:
         raise HTTPException(status_code=502,detail="暂时无法加载球队队徽") from error
 
+BESIKTAS_LOGO_URL="https://thumb.wikimedia.org/wikipedia/commons/thumb/d/da/BesiktasJK-Logo.svg/960px-BesiktasJK-Logo.svg.png"
+
 @app.get("/team-logo/{team_id}.png")
 def team_logo(team_id:int, _:str=Depends(auth)):
     entry=team_directory_by_id().get(str(team_id))
-    logo_url=f"https://media.api-sports.io/football/teams/{team_id}.png"
-    if not entry or entry.get("logo")!=logo_url:
+    logo_url=entry.get("logo") if isinstance(entry,dict) else None
+    api_logo_url=f"https://media.api-sports.io/football/teams/{team_id}.png"
+    is_besiktas_logo=team_id==549 and logo_url==BESIKTAS_LOGO_URL
+    if not entry or (logo_url!=api_logo_url and not is_besiktas_logo):
         raise HTTPException(status_code=404,detail="球队队徽不存在")
     image=fetch_team_logo(logo_url)
     return Response(image,media_type="image/png",headers={"Cache-Control":"private, max-age=86400","X-Content-Type-Options":"nosniff"})

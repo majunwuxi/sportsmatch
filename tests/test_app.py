@@ -441,6 +441,23 @@ def test_team_logo_proxy_only_fetches_allowlisted_team_images(client,monkeypatch
     assert client.get('/team-logo/999999.png',auth=('test','test-password')).status_code==404
     assert calls==['https://media.api-sports.io/football/teams/569.png']
 
+
+def test_besiktas_is_in_team_directory_and_logo_proxy_uses_only_curated_url(client,monkeypatch):
+    response=client.get('/teams-map.js',auth=('test','test-password'))
+    assert response.status_code==200
+    assert '"549"' in response.text and '贝西克塔斯' in response.text
+    assert "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/da/BesiktasJK-Logo.svg/960px-BesiktasJK-Logo.svg.png" in response.text
+    calls=[]
+    image=b'\\x89PNG\\r\\n\\x1a\\nvalid-png'
+    monkeypatch.setattr(m,'fetch_team_logo',lambda url:(calls.append(url) or image))
+    response=client.get('/team-logo/549.png',auth=('test','test-password'))
+    assert response.status_code==200
+    assert response.content==image
+    assert calls==[m.BESIKTAS_LOGO_URL]
+    monkeypatch.setattr(m,'team_directory_by_id',lambda:{'777':{'logo':'https://example.com/unsafe.png'}})
+    assert client.get('/team-logo/777.png',auth=('test','test-password')).status_code==404
+    assert calls==[m.BESIKTAS_LOGO_URL]
+
 def test_brand_logo_is_authenticated_and_serves_webp(client):
     response=client.get('/brand-logo.webp',auth=('test','test-password'))
     assert response.status_code==200
