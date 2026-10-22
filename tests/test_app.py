@@ -273,6 +273,30 @@ def test_ticket_validation(client,monkeypatch):
                    {'market':'half_full','selection':'负胜','stake':2,'odds':8}]:
         assert client.put('/api/tasks/1/tickets',auth=('test','test-password'),json=[ticket]).status_code==200
 
+def test_ticket_updates_can_change_stake_and_sp_then_remove_a_row(client,monkeypatch):
+    create(client,monkeypatch)
+    with m.conn() as c:
+        c.execute("UPDATE tasks SET last_score='2:1',settlement_score='2:1'")
+    tickets=[
+        {'market':'correct_score','selection':'2:1','stake':4,'odds':6},
+        {'market':'total_goals','selection':'3','stake':2,'odds':3.5},
+    ]
+    edited=client.put('/api/tasks/1/tickets',auth=('test','test-password'),json=tickets)
+    assert edited.status_code==200 and edited.json()['tickets']==2
+    row=client.get('/api/tasks',auth=('test','test-password')).json()[0]
+    assert row['settlement']['total']==6
+    assert row['settlement']['payout']==31
+    assert row['settlement']['tickets'][0]['stake']==4
+    assert row['settlement']['tickets'][0]['odds']==6
+    updated=[{'market':'correct_score','selection':'2:1','stake':6,'odds':7.25}]
+    removed=client.put('/api/tasks/1/tickets',auth=('test','test-password'),json=updated)
+    assert removed.status_code==200 and removed.json()['tickets']==1
+    row=client.get('/api/tasks',auth=('test','test-password')).json()[0]
+    assert row['tickets']==updated
+    assert row['settlement']['total']==6
+    assert row['settlement']['payout']==43.5
+    assert row['settlement']['net']==37.5
+
 def test_tasks_expose_chinese_status_and_bet_breakdown(client,monkeypatch):
     create(client,monkeypatch)
     with m.conn() as c:
@@ -365,7 +389,7 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert 'class="section-divider"' in html
     assert '.dashboard-layout{display:grid' in html and '@media(max-width:900px)' in html
     assert html.index('<h2>查找比赛</h2>') < html.index('<h2>创建监测任务</h2>') < html.index('<h2>监测任务</h2>') < html.index('class="section-divider"') < html.index('竞彩足球比分投注模拟器')
-    assert '下载JSON文件' in html and '自动均衡分配' in html
+    assert '下载JSON文件' not in html and '复制投注 JSON' in html and '自动均衡分配' in html
     assert 'betScreenshot' in html and 'ocrConfirm' in html and '/ocr-parser.js' in html and '/ocr-ui.js' in html
     assert 'id="simulatorManual" hidden' in html and 'id="manualMode"' in html
     assert 'id="ocrBudget"' in html and 'ocr-balance-row' in html
@@ -378,7 +402,11 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert 'method:"DELETE"' in html and '"/schedule"' in html
     assert '请选择项目、核对SP并分配金额。' in html
     assert 'expandedBetTaskIds' in html and '展开投注' in html and 'aria-expanded' in html
-    assert 'const finished=t.status==="finished"' in html and 'b.disabled=finished' in html
+    assert 'finished=t.status==="finished"' in html and 'b.disabled=finished' in html
+    assert 'ticketDrafts' in html and 'className="ticket-edit-input"' in html
+    assert 'validateInlineTicket' in html and 'textContent="保存"' in html
+    assert 'textContent="删除"' in html and 'colSpan=6' in html
+    assert 'ticketUpdatesInFlight' in html and '保存失败：' in html
     assert '.task.task-finished{background:#fff7d6' in html
     assert 'box.className="task"+(t.status==="finished"?" task-finished":"")' in html
     ui=(m.Path(__file__).parents[1]/'ocr-ui.js').read_text(encoding='utf-8')

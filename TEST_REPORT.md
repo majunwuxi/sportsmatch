@@ -283,3 +283,11 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - node --check passed for the inline dashboard script, ocr-ui.js, generated Worker, and Worker sync script. npm run build --prefix site and npm run validate --prefix site passed. git diff --check passed.
 - Owner-only Site version 39 deployed successfully at https://bm.sendmymail.top; canonical Site URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site. The access policy remains custom with only the owner, zero groups, and zero external visitors. Site source commit: e2310cceb87ac7c93d5f6f02e5c930ea66e3285a.
 - No server service was accessed or restarted, including sportsmatch-web.service and napoli-monitor.service. No API keys, Telegram tokens, server credentials, screenshots, or private betting records were added.
+
+## 2026-10-22 — Inline monitoring-task bet editing
+
+- Added per-row stake/SP inputs and Save/Delete actions to the expanded task bet breakdown. Saves and deletes submit through the same-origin, authenticated ticket endpoint; the backend recalculates payout and net profit. Finished tasks lock these controls. Input validation requires stake in positive 2-yuan units and SP ≥ 1.
+- Regression coverage exercises the actual rendered row handlers, verifies updated stake/SP payloads, deletion of the selected ticket only, finished-row locking, and authenticated Worker forwarding.
+- `node --test site/worker/test.mjs tests/test_ocr_parser.mjs`: 56/56 passed. Packaged Site Worker: 34/34 passed. JavaScript syntax, Python byte-compilation, Site build, ESM artifact validation, and `git diff --check` passed. Full pytest tests were unavailable because pytest and FastAPI are not installed in this workspace.
+- Deployed owner-only Site version 40 to https://bm.sendmymail.top; canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site. The access policy remains custom with one owner, no groups, and no external visitors. Site source commit: `3e66708040a71cf42490464b38b422eefecd7be6`.
+- No backend service was changed or restarted, including `sportsmatch-web.service` and `napoli-monitor.service`. No secrets, server credentials, screenshots, or private betting records were included.
