@@ -37,7 +37,7 @@ const routes = ` const url=new URL(request.url);
    if(!match)return json({detail:'球队队徽不存在'},404);
    if(request.method!=='GET')return json({detail:'Method not allowed'},405);
    const id=match[1],entry=TEAM_DIRECTORY[id];
-   if(!entry||entry.logo!=='https://media.api-sports.io/football/teams/'+id+'.png')return json({detail:'球队队徽不存在'},404);
+   if(!entry||(entry.logo!=='https://media.api-sports.io/football/teams/'+id+'.png'&&!(id==='549'&&entry.logo==='https://thumb.wikimedia.org/wikipedia/commons/thumb/d/da/BesiktasJK-Logo.svg/960px-BesiktasJK-Logo.svg.png')))return json({detail:'球队队徽不存在'},404);
    if(!env.BACKEND_URL||!env.BACKEND_USER||!env.BACKEND_PASSWORD)return json({detail:'独立监测后台尚未配置'},503);
    let backend;
    try{backend=new URL(env.BACKEND_URL);if(backend.protocol!=='https:'||backend.username||backend.password)throw Error('invalid backend url');backend.pathname='/team-logo/'+id+'.png';backend.search='';backend.hash=''}catch{return json({detail:'后台必须使用HTTPS地址'},503)}
