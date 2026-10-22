@@ -37,7 +37,7 @@ const routes = ` const url=new URL(request.url);
    if(!match)return json({detail:'球队队徽不存在'},404);
    if(request.method!=='GET')return json({detail:'Method not allowed'},405);
    const id=match[1],entry=TEAM_DIRECTORY[id];
-   if(!entry||(entry.logo!=='https://media.api-sports.io/football/teams/'+id+'.png'&&!(id==='549'&&entry.logo==='https://thumb.wikimedia.org/wikipedia/commons/thumb/d/da/BesiktasJK-Logo.svg/960px-BesiktasJK-Logo.svg.png')))return json({detail:'球队队徽不存在'},404);
+   if(!hasRegisteredTeamLogo(entry))return json({detail:'球队队徽不存在'},404);
    if(!env.BACKEND_URL||!env.BACKEND_USER||!env.BACKEND_PASSWORD)return json({detail:'独立监测后台尚未配置'},503);
    let backend;
    try{backend=new URL(env.BACKEND_URL);if(backend.protocol!=='https:'||backend.username||backend.password)throw Error('invalid backend url');backend.pathname='/team-logo/'+id+'.png';backend.search='';backend.hash=''}catch{return json({detail:'后台必须使用HTTPS地址'},503)}
@@ -67,6 +67,6 @@ rest = rest.replace(/ \/\/ BRAND_LOGO_ROUTE_BEGIN[\s\S]*? \/\/ BRAND_LOGO_ROUTE_
 rest = rest.replace(/ if\(url\.pathname==='\/brand-logo\.webp'\)\{\n[\s\S]*?\n \}\n/g, '');
 rest = rest.replace(/ \/\/ TEAM_LOGO_PROXY_ROUTE_BEGIN[\s\S]*? \/\/ TEAM_LOGO_PROXY_ROUTE_END\n/g, '');
 rest = rest.replace(routeMarker, routes);
-const output = `${prefix}const HTML=${JSON.stringify(html)};\nconst OCR_PARSER=${JSON.stringify(parser)};\nconst OCR_UI=${JSON.stringify(ui)};\nconst TEAM_MAP_JS=${JSON.stringify(teamMap)};\nconst BRAND_LOGO_B64=${JSON.stringify(logo.toString('base64'))};\nconst TEAM_DIRECTORY=JSON.parse(TEAM_MAP_JS.slice("globalThis.MatchMonitorTeamDirectory=".length).trim().replace(/;$/, ""));\n${rest}`;
+const output = `${prefix}const HTML=${JSON.stringify(html)};\nconst OCR_PARSER=${JSON.stringify(parser)};\nconst OCR_UI=${JSON.stringify(ui)};\nconst TEAM_MAP_JS=${JSON.stringify(teamMap)};\nconst BRAND_LOGO_B64=${JSON.stringify(logo.toString('base64'))};\nconst TEAM_DIRECTORY=JSON.parse(TEAM_MAP_JS.slice("globalThis.MatchMonitorTeamDirectory=".length).trim().replace(/;$/, ""));\nfunction hasRegisteredTeamLogo(entry){if(typeof entry?.logo!=="string")return false;try{const logo=new URL(entry.logo);return logo.protocol==="https:"&&Boolean(logo.hostname)&&!logo.username&&!logo.password&&!logo.port}catch{return false}}\n${rest}`;
 await writeFile(workerPath, output);
 console.log('Synced dashboard HTML, OCR assets, and team directory into the Sites Worker.');

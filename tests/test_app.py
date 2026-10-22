@@ -427,7 +427,7 @@ def test_team_map_asset_is_authenticated_and_contains_team_badges(client):
     assert 'Club Brugge KV' in response.text and '布鲁日' in response.text
     assert 'https://media.api-sports.io/football/teams/569.png' in response.text
 
-def test_team_logo_proxy_only_fetches_allowlisted_team_images(client,monkeypatch):
+def test_team_logo_proxy_uses_the_logo_registered_for_each_team(client,monkeypatch):
     calls=[]
     image=b'\x89PNG\r\n\x1a\nvalid-png'
     monkeypatch.setattr(m,'fetch_team_logo',lambda url:(calls.append(url) or image))
@@ -442,21 +442,32 @@ def test_team_logo_proxy_only_fetches_allowlisted_team_images(client,monkeypatch
     assert calls==['https://media.api-sports.io/football/teams/569.png']
 
 
-def test_besiktas_is_in_team_directory_and_logo_proxy_uses_only_curated_url(client,monkeypatch):
+def test_custom_registered_logo_from_another_https_host_is_served(client,monkeypatch):
     response=client.get('/teams-map.js',auth=('test','test-password'))
     assert response.status_code==200
     assert '"549"' in response.text and '贝西克塔斯' in response.text
     assert "https://thumb.wikimedia.org/wikipedia/commons/thumb/d/da/BesiktasJK-Logo.svg/960px-BesiktasJK-Logo.svg.png" in response.text
     calls=[]
-    image=b'\\x89PNG\\r\\n\\x1a\\nvalid-png'
+    image=b'\x89PNG\r\n\x1a\nvalid-png'
     monkeypatch.setattr(m,'fetch_team_logo',lambda url:(calls.append(url) or image))
-    response=client.get('/team-logo/549.png',auth=('test','test-password'))
+    custom_logo='https://logos.example.org/football/custom-club.png?width=256'
+    monkeypatch.setattr(m,'team_directory_by_id',lambda:{'777':{'name_en':'Custom Club','logo':custom_logo}})
+    response=client.get('/team-logo/777.png',auth=('test','test-password'))
     assert response.status_code==200
     assert response.content==image
-    assert calls==[m.BESIKTAS_LOGO_URL]
-    monkeypatch.setattr(m,'team_directory_by_id',lambda:{'777':{'logo':'https://example.com/unsafe.png'}})
-    assert client.get('/team-logo/777.png',auth=('test','test-password')).status_code==404
-    assert calls==[m.BESIKTAS_LOGO_URL]
+    assert calls==[custom_logo]
+    for unsafe_logo in ('http://logos.example.org/badge.png','https://user:pass@logos.example.org/badge.png','https://logos.example.org:8443/badge.png','https://127.0.0.1/badge.png'):
+        monkeypatch.setattr(m,'team_directory_by_id',lambda url=unsafe_logo:{'777':{'logo':url}})
+        assert client.get('/team-logo/777.png',auth=('test','test-password')).status_code==404
+    assert calls==[custom_logo]
+
+def test_team_logo_dns_resolution_pins_only_public_addresses(monkeypatch):
+    import socket
+    monkeypatch.setattr(m.socket,'getaddrinfo',lambda host,port,type:[(socket.AF_INET,socket.SOCK_STREAM,6,'',( '93.184.216.34',port))])
+    assert m._resolve_public_team_logo_target('https://logos.example.org/badge.png?size=2')==('logos.example.org','93.184.216.34','/badge.png?size=2')
+    monkeypatch.setattr(m.socket,'getaddrinfo',lambda host,port,type:[(socket.AF_INET,socket.SOCK_STREAM,6,'',('93.184.216.34',port)),(socket.AF_INET,socket.SOCK_STREAM,6,'',('127.0.0.1',port))])
+    with pytest.raises(ValueError):
+        m._resolve_public_team_logo_target('https://logos.example.org/badge.png')
 
 def test_brand_logo_is_authenticated_and_serves_webp(client):
     response=client.get('/brand-logo.webp',auth=('test','test-password'))

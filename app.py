@@ -1,4 +1,4 @@
-import os, json, time, sqlite3, threading, urllib.request, urllib.parse
+import os, json, time, sqlite3, threading, urllib.request, urllib.parse, http.client, ipaddress, socket, ssl
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
@@ -548,38 +548,115 @@ def team_directory_by_id():
         return {}
     return directory if isinstance(directory,dict) else {}
 
-class _NoTeamLogoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
+def _team_logo_url_parts(logo_url):
+    if not isinstance(logo_url,str) or len(logo_url)>2048:
+        raise ValueError("invalid logo URL")
+    parsed=urllib.parse.urlsplit(logo_url)
+    try:
+        port=parsed.port
+    except ValueError as error:
+        raise ValueError("invalid logo URL port") from error
+    if parsed.scheme.lower()!="https" or not parsed.hostname or parsed.username or parsed.password or port not in (None,443):
+        raise ValueError("logo URL must be a public HTTPS URL")
+    host=parsed.hostname.rstrip(".")
+    try:
+        literal=ipaddress.ip_address(host)
+    except ValueError:
+        literal=None
+    if literal is not None:
+        if not literal.is_global:
+            raise ValueError("team logo address is not public")
+        host=literal.compressed
+    else:
+        try:
+            host=host.encode("idna").decode("ascii").lower()
+        except UnicodeError as error:
+            raise ValueError("invalid logo hostname") from error
+        if not host or len(host)>253 or any(not label or len(label)>63 or label.startswith("-") or label.endswith("-") or not all(ch.isalnum() or ch=="-" for ch in label) for label in host.split(".")):
+            raise ValueError("invalid logo hostname")
+    return parsed,host
+
+def _resolve_public_team_logo_target(logo_url):
+    parsed,host=_team_logo_url_parts(logo_url)
+    try:
+        literal=ipaddress.ip_address(host)
+    except ValueError:
+        literal=None
+    if literal is not None:
+        if not literal.is_global:
+            raise ValueError("team logo address is not public")
+        addresses=[literal.compressed]
+    else:
+        try:
+            records=socket.getaddrinfo(host,443,type=socket.SOCK_STREAM)
+        except OSError as error:
+            raise RuntimeError("team logo hostname could not be resolved") from error
+        addresses=[]
+        for record in records:
+            address=record[4][0].split("%",1)[0]
+            try:
+                parsed_address=ipaddress.ip_address(address)
+            except ValueError as error:
+                raise ValueError("invalid resolved team logo address") from error
+            if not parsed_address.is_global:
+                raise ValueError("team logo address is not public")
+            if parsed_address.compressed not in addresses:
+                addresses.append(parsed_address.compressed)
+        if not addresses:
+            raise RuntimeError("team logo hostname has no addresses")
+    path=parsed.path or "/"
+    if parsed.query:
+        path+="?"+parsed.query
+    return host,addresses[0],path
+
+class _PinnedTeamLogoHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self,host,address,timeout=8):
+        super().__init__(host,port=443,timeout=timeout,context=ssl.create_default_context())
+        self.pinned_address=address
+
+    def connect(self):
+        self.sock=socket.create_connection((self.pinned_address,self.port),self.timeout,self.source_address)
+        if self._tunnel_host:
+            self._tunnel()
+        self.sock=self._context.wrap_socket(self.sock,server_hostname=self.host)
 
 def fetch_team_logo(logo_url):
-    request=urllib.request.Request(logo_url,headers={"User-Agent":"MatchMonitor/1.0"})
-    opener=urllib.request.build_opener(_NoTeamLogoRedirect())
+    connection=None
     try:
-        with opener.open(request,timeout=8) as upstream:
-            content_type=upstream.headers.get_content_type()
-            if content_type!="image/png":
-                raise HTTPException(status_code=502,detail="球队队徽服务返回了非PNG图片")
-            image=upstream.read(2*1024*1024+1)
-            if len(image)>2*1024*1024:
-                raise HTTPException(status_code=502,detail="球队队徽图片超过大小限制")
-            if len(image)<8 or image[:8]!=b"\x89PNG\r\n\x1a\n":
-                raise HTTPException(status_code=502,detail="球队队徽服务返回了无效PNG图片")
-            return image
+        host,address,path=_resolve_public_team_logo_target(logo_url)
+        connection=_PinnedTeamLogoHTTPSConnection(host,address,timeout=8)
+        connection.request("GET",path,headers={"User-Agent":"MatchMonitor/1.0","Accept":"image/png"})
+        upstream=connection.getresponse()
+        if upstream.status!=200:
+            raise HTTPException(status_code=502,detail="球队队徽服务未返回图片")
+        content_type=upstream.getheader("Content-Type","").split(";",1)[0].strip().lower()
+        if content_type!="image/png":
+            raise HTTPException(status_code=502,detail="球队队徽服务返回了非PNG图片")
+        if int(upstream.getheader("Content-Length","0") or 0)>2*1024*1024:
+            raise HTTPException(status_code=502,detail="球队队徽图片超过大小限制")
+        image=upstream.read(2*1024*1024+1)
+        if len(image)>2*1024*1024:
+            raise HTTPException(status_code=502,detail="球队队徽图片超过大小限制")
+        if len(image)<8 or image[:8]!=b"\x89PNG\r\n\x1a\n":
+            raise HTTPException(status_code=502,detail="球队队徽服务返回了无效PNG图片")
+        return image
+    except ValueError as error:
+        raise HTTPException(status_code=404,detail="球队队徽地址无效或不安全") from error
     except HTTPException:
         raise
     except Exception as error:
         raise HTTPException(status_code=502,detail="暂时无法加载球队队徽") from error
-
-BESIKTAS_LOGO_URL="https://thumb.wikimedia.org/wikipedia/commons/thumb/d/da/BesiktasJK-Logo.svg/960px-BesiktasJK-Logo.svg.png"
+    finally:
+        if connection is not None:
+            connection.close()
 
 @app.get("/team-logo/{team_id}.png")
 def team_logo(team_id:int, _:str=Depends(auth)):
     entry=team_directory_by_id().get(str(team_id))
     logo_url=entry.get("logo") if isinstance(entry,dict) else None
-    api_logo_url=f"https://media.api-sports.io/football/teams/{team_id}.png"
-    is_besiktas_logo=team_id==549 and logo_url==BESIKTAS_LOGO_URL
-    if not entry or (logo_url!=api_logo_url and not is_besiktas_logo):
+    try:
+        _team_logo_url_parts(logo_url)
+    except (TypeError,ValueError):
         raise HTTPException(status_code=404,detail="球队队徽不存在")
     image=fetch_team_logo(logo_url)
     return Response(image,media_type="image/png",headers={"Cache-Control":"private, max-age=86400","X-Content-Type-Options":"nosniff"})
