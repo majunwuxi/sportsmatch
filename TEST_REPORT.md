@@ -291,3 +291,10 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - `node --test site/worker/test.mjs tests/test_ocr_parser.mjs`: 56/56 passed. Packaged Site Worker: 34/34 passed. JavaScript syntax, Python byte-compilation, Site build, ESM artifact validation, and `git diff --check` passed. Full pytest tests were unavailable because pytest and FastAPI are not installed in this workspace.
 - Deployed owner-only Site version 40 to https://bm.sendmymail.top; canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site. The access policy remains custom with one owner, no groups, and no external visitors. Site source commit: `3e66708040a71cf42490464b38b422eefecd7be6`.
 - No backend service was changed or restarted, including `sportsmatch-web.service` and `napoli-monitor.service`. No secrets, server credentials, screenshots, or private betting records were included.
+
+## 2026-10-22 — Compact monitoring-task bet columns
+
+- Narrowed the amount, share, and SP columns in expanded task details, reduced inline input width on phones, and allowed long bet labels and result text to wrap.
+- Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 58/58 passed; packaged Site Worker tests — 36/36 passed. Site Worker build and ESM validation, JavaScript syntax checks, Python byte-compilation, and `git diff --check` passed. Backend pytest could not run because pytest, FastAPI, and httpx are not installed in this workspace.
+- Deployed owner-only Site version 43 to https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site). Access remains limited to the owner, with no groups or external visitors.
+- The separate amstd backend was not accessed or restarted. Pull the GitHub main commit and restart only `sportsmatch-web.service` to apply this page change there.
