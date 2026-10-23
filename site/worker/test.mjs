@@ -129,3 +129,5 @@ test('fixture search resolves Chinese team names through the bundled directory',
  assert.equal(partial.query,'');
  assert.ok(partial.filterNames?.includes('AC Milan'));
 });
+
+test('monitor start defaults to two hours after kickoff in Beijing time',async()=>{const html=await(await worker.fetch(req('/'),{})).text();const start=html.indexOf('function parseKickoffDate('),end=html.indexOf('const TEAM_NAMES_ZH=',start);assert.ok(start>=0&&end>start);const context={};vm.runInNewContext(html.slice(start,end)+'\nglobalThis.monitorStartInputFromKickoff=monitorStartInputFromKickoff;',context);assert.equal(context.monitorStartInputFromKickoff('2026-10-23T19:00:00Z'),'2026-10-24T05:00');assert.equal(context.monitorStartInputFromKickoff('2026-10-24T03:00:00+08:00'),'2026-10-24T05:00');assert.equal(context.monitorStartInputFromKickoff('not-a-date'),'');assert.match(html,/setDefaultMonitorStart\(item\.kickoff\)/);assert.match(html,/setDefaultMonitorStart\(selected\.kickoff\)/)});

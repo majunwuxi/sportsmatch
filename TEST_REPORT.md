@@ -298,3 +298,10 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 58/58 passed; packaged Site Worker tests — 36/36 passed. Site Worker build and ESM validation, JavaScript syntax checks, Python byte-compilation, and `git diff --check` passed. Backend pytest could not run because pytest, FastAPI, and httpx are not installed in this workspace.
 - Deployed owner-only Site version 43 to https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site). Access remains limited to the owner, with no groups or external visitors.
 - The separate amstd backend was not accessed or restarted. Pull the GitHub main commit and restart only `sportsmatch-web.service` to apply this page change there.
+
+## 2026-10-23 — Beijing default monitoring start time
+
+- Selecting a fixture with an available kickoff time now sets the monitoring start input to kickoff + 120 minutes in Asia/Shanghai. Importing a task-ready JSON object with a fixture ID and kickoff time applies the same default. The user can still change the time manually.
+- Regression coverage verifies a UTC kickoff at `2026-10-23T19:00:00Z` becomes `2026-10-24T05:00` Beijing time, as well as an explicit `+08:00` input and an invalid-time fallback.
+- Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 59/59 passed; packaged Site Worker — 37/37 passed; Site build and ESM artifact validation passed. JavaScript syntax checks, Python byte-compilation, and `git diff --check` passed.
+- The Site remains owner-only. The amstd backend was not changed or restarted; pull the new GitHub `main` commit and restart only `sportsmatch-web.service` to apply this default there.
