@@ -305,3 +305,10 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Regression coverage verifies a UTC kickoff at `2026-10-23T19:00:00Z` becomes `2026-10-24T05:00` Beijing time, as well as an explicit `+08:00` input and an invalid-time fallback.
 - Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 59/59 passed; packaged Site Worker — 37/37 passed; Site build and ESM artifact validation passed. JavaScript syntax checks, Python byte-compilation, and `git diff --check` passed.
 - Deployed owner-only ChatGPT Site version 44 at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site). The amstd backend was not changed or restarted; pull the new GitHub `main` commit and restart only `sportsmatch-web.service` to apply this default there.
+
+## 2026-10-23 — Match search defaults to tomorrow
+
+- The fixture search date now defaults to tomorrow in Asia/Shanghai and remains editable. This uses Beijing calendar dates rather than the browser's local timezone.
+- Regression coverage verifies the normal day rollover and the year boundary.
+- Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 60/60 passed; packaged Site Worker — 38/38 passed; Site build and ESM artifact validation passed. JavaScript syntax checks and `git diff --check` passed.
+- Deployed owner-only ChatGPT Site version 45 at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site). The amstd backend was not restarted.
