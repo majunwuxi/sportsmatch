@@ -370,3 +370,10 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Verification: backend pytest — 62 passed; OCR parser plus Site Worker tests — 66 passed; packaged Site Worker tests — 42 passed; Site build and ESM artifact validation, Python byte-compilation, JavaScript syntax, and `git diff --check` passed.
 - Owner-only Site version 51 deployed successfully at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site), source commit `37f099c5ffabc8e332ed210cd0e0344867cf031d`. Access remains custom owner-only with one allowed user, no groups, and no external visitors.
 - The amstd server was not accessed. Pull the GitHub update and restart only `sportsmatch-web.service` to apply the card color; `napoli-monitor.service` is untouched.
+
+## 2026-10-25 — Color only completed task cards by elapsed time since kickoff
+
+- Upcoming or pending task cards keep their normal background regardless of how far away kickoff is. Completed cards stay yellow through exactly 12 hours after kickoff, then turn light orange strictly after the 12-hour boundary.
+- Regression coverage checks the 12-hour boundary, an elapsed time greater than 12 hours, a pending match with an old kickoff, and an invalid kickoff.
+- Verification: backend pytest — 62 passed; root OCR and Worker tests — 66 passed; packaged Site Worker tests — 42 passed; Site build and ESM validation passed.
+- Owner-only Site version 52 is live at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site), Site source commit `7fbbf6d2fd1231db73a0231265ca0ff38891a2ac`. Access remains one owner, zero groups, and zero external visitors. No amstd or systemd services were changed.

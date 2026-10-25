@@ -115,3 +115,10 @@ Keep the existing backend secrets in their current server-side environment. Foll
 - Tests cover the strict 12-hour boundary and confirm the finished-card class takes precedence.
 - Regenerated and validated the Sites Worker bundle. Owner-only Site version 51 is live at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site). Source commit: `37f099c5ffabc8e332ed210cd0e0344867cf031d`.
 - Access was rechecked after deployment: owner role, custom access, one allowed user, zero groups, zero external visitors. The amstd server was not accessed; pull the GitHub update and restart only `sportsmatch-web.service`. `napoli-monitor.service` remains untouched.
+
+## 2026-10-25 — Color only completed task cards by elapsed time since kickoff
+
+- Upcoming or pending task cards keep their normal background regardless of how far away kickoff is. Completed cards stay yellow through exactly 12 hours after kickoff, then turn light orange strictly after the 12-hour boundary.
+- Regression coverage checks the 12-hour boundary, an elapsed time greater than 12 hours, a pending match with an old kickoff, and an invalid kickoff.
+- Verification: backend pytest — 62 passed; root OCR and Worker tests — 66 passed; packaged Site Worker tests — 42 passed; Site build and ESM validation passed.
+- Owner-only Site version 52 is live at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site), Site source commit `7fbbf6d2fd1231db73a0231265ca0ff38891a2ac`. Access remains one owner, zero groups, and zero external visitors. No amstd or systemd services were changed.
