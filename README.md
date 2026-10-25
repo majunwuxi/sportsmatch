@@ -1,6 +1,6 @@
 # Match Monitor
 
-A Chinese-language football and NBA match monitoring dashboard using API-Football, BallDontLie, and Telegram, with persisted match tasks and multi-leg Chinese Sports Lottery settlement for football.
+A Chinese-language football, NBA, and WNBA match monitoring dashboard using API-Football, BallDontLie, and Telegram, with persisted match tasks and Chinese Sports Lottery settlement.
 
 ## Status
 
@@ -9,7 +9,10 @@ The dashboard is published as an owner-private ChatGPT Site. Its always-on sched
 ## Features
 
 - Search fixtures by date and team name using API-Football; show the competition to distinguish youth and senior teams
-- Search NBA games by date and team in English or Chinese through BallDontLie; monitor scores and game status only, without football lottery settlement
+- Search NBA and WNBA games by date and team in English or Chinese through BallDontLie
+- Default basketball monitoring's first check to 2 hours 30 minutes after kickoff
+- Settle the four single-game JC Basketball markets: result, handicap result, over/under total, and winning margin; use the final score including overtime
+- Maintain all 30 NBA and 15 current WNBA teams with Chinese names and official CDN logos
 - Request and store fixture kickoff timestamps in `Asia/Shanghai`; display every kickoff with an explicit Beijing-time label
 - Create monitoring tasks with start time (Asia/Shanghai) and interval; multiple matches supported
 - Create standalone pass-ticket monitors by adding match legs from fixture search or parsing ticket/OCR text into a review table; bind every leg to an API-Football fixture before creating it
@@ -26,7 +29,7 @@ The dashboard is published as an owner-private ChatGPT Site. Its always-on sched
 - Keep BallDontLie requests at least 12.5 seconds apart to stay within its documented Free-plan rate limit
 - API daily call budget guard and graceful error recording
 
-See `.env.example`, `app.py` and `DEPLOY.md`.
+Basketball ticket JSON records the ticket's actual SP and, for handicap/total markets, its signed home adjustment or points line. Basketball parlays are not supported. See `.env.example`, `app.py` and `DEPLOY.md`.
 
 ChatGPT Sites can be evaluated for the frontend, but this Python background scheduler requires an always-on runtime. See `SITES.md`.
 

@@ -34,24 +34,29 @@ LISTED_LOSSES={":".join(reversed(x.split(":"))) for x in LISTED_WINS}
 LISTED_SCORE_OPTIONS=LISTED_WINS | LISTED_DRAWS | LISTED_LOSSES
 SCORES=LISTED_SCORE_OPTIONS | {"胜其他","平其他","负其他","胜其它","平其它","负其它"}
 OTHER_SCORE_ALIASES={"胜其它":"胜其他","平其它":"平其他","负其它":"负其他"}
-MARKETS={"correct_score":"比分","match_result":"胜平负","handicap":"让球胜平负","total_goals":"总进球","half_full":"半全场"}
+MARKETS={"correct_score":"比分","match_result":"胜平负","handicap":"让球胜平负","total_goals":"总进球","half_full":"半全场",
+    "basketball_result":"竞彩篮球胜负","basketball_handicap":"竞彩篮球让分胜负",
+    "basketball_total":"竞彩篮球大小分","basketball_margin":"竞彩篮球胜分差"}
+BASKETBALL_MARKETS={"basketball_result","basketball_handicap","basketball_total","basketball_margin"}
 RESULTS={"胜","平","负"}
 HALF_FULL={a+b for a in RESULTS for b in RESULTS}
 TOTAL_GOALS={"0","1","2","3","4","5","6","7+"}
 STATUS_CN={"TBD":"待定","NS":"未开赛","1H":"上半场","HT":"中场休息","2H":"下半场","ET":"加时赛","BT":"加时赛休息","P":"点球大战","SUSP":"暂停","INT":"中断","FT":"完场","AET":"加时赛结束","PEN":"点球结束","PST":"延期","CANC":"已取消","ABD":"比赛中止","AWD":"判定赛果","WO":"弃权"}
-BALLDONTLIE_GAME_ID_BASE=1_000_000_000_000
-NBA_TEAM_NAMES_ZH={
-    "Atlanta Hawks":"亚特兰大老鹰","Boston Celtics":"波士顿凯尔特人","Brooklyn Nets":"布鲁克林篮网",
-    "Charlotte Hornets":"夏洛特黄蜂","Chicago Bulls":"芝加哥公牛","Cleveland Cavaliers":"克利夫兰骑士",
-    "Dallas Mavericks":"达拉斯独行侠","Denver Nuggets":"丹佛掘金","Detroit Pistons":"底特律活塞",
-    "Golden State Warriors":"金州勇士","Houston Rockets":"休斯敦火箭","Indiana Pacers":"印第安纳步行者",
-    "Los Angeles Clippers":"洛杉矶快船","Los Angeles Lakers":"洛杉矶湖人","Memphis Grizzlies":"孟菲斯灰熊",
-    "Miami Heat":"迈阿密热火","Milwaukee Bucks":"密尔沃基雄鹿","Minnesota Timberwolves":"明尼苏达森林狼",
-    "New Orleans Pelicans":"新奥尔良鹈鹕","New York Knicks":"纽约尼克斯","Oklahoma City Thunder":"俄克拉荷马雷霆",
-    "Orlando Magic":"奥兰多魔术","Philadelphia 76ers":"费城76人","Phoenix Suns":"菲尼克斯太阳",
-    "Portland Trail Blazers":"波特兰开拓者","Sacramento Kings":"萨克拉门托国王","San Antonio Spurs":"圣安东尼奥马刺",
-    "Toronto Raptors":"多伦多猛龙","Utah Jazz":"犹他爵士","Washington Wizards":"华盛顿奇才",
-}
+BALLDONTLIE_GAME_ID_BASE={"nba":1_000_000_000_000,"wnba":2_000_000_000_000}
+
+def _load_basketball_teams():
+    source=Path(__file__).with_name("basketball-teams.js").read_text(encoding="utf-8").strip()
+    prefix="globalThis.MatchMonitorBasketballTeamDirectory = "
+    if not source.startswith(prefix):return []
+    payload=source[len(prefix):].strip()
+    if payload.endswith(";"):payload=payload[:-1]
+    try:teams=json.loads(payload)
+    except json.JSONDecodeError:return []
+    return teams if isinstance(teams,list) else []
+
+BASKETBALL_TEAMS=_load_basketball_teams()
+BASKETBALL_TEAM_NAMES_ZH={team["name_en"]:team["name_zh"] for team in BASKETBALL_TEAMS
+    if isinstance(team,dict) and team.get("name_en") and team.get("name_zh")}
 TASK_STATUS_CN={"pending":"等待开始","running":"监测中","paused":"已暂停","stopped":"已停止","finished":"已完赛","review_required":"待人工确认"}
 PARLAY_STATUS_CN={"pending":"监测中","won":"已中奖","lost":"未中奖","review_required":"待人工核验","stopped":"已停止"}
 # Official JCZQ system-pass modes, mapped to the sizes of the elementary
@@ -144,6 +149,9 @@ def init_db():
             c.execute("ALTER TABLE tasks ADD COLUMN sport TEXT NOT NULL DEFAULT 'football'")
         if "provider_game_id" not in columns:
             c.execute("ALTER TABLE tasks ADD COLUMN provider_game_id TEXT")
+        if "league_code" not in columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN league_code TEXT")
+        c.execute("UPDATE tasks SET league_code='nba' WHERE sport='basketball' AND (league_code IS NULL OR league_code='')")
         c.execute("UPDATE tasks SET provider_game_id=CAST(fixture_id AS TEXT) WHERE sport='football' AND provider_game_id IS NULL")
         c.execute("UPDATE tasks SET finished_at=COALESCE(NULLIF(last_check,''),created_at) WHERE status='finished' AND finished_at IS NULL")
 
@@ -183,8 +191,10 @@ def balldontlie_key():
     key=os.getenv("BALLDONTLIE_API_KEY","").strip()
     return "" if key.casefold() in {"replace_me","your_key","your_api_key"} else key
 
-def balldontlie_api(endpoint,params=None):
+def balldontlie_api(endpoint,params=None,league_code="nba"):
     global BALLDONTLIE_LAST_REQUEST
+    league_code=str(league_code or "nba").lower()
+    if league_code not in BALLDONTLIE_GAME_ID_BASE:raise HTTPException(422,"Basketball league must be nba or wnba")
     key=balldontlie_key()
     if not key:raise HTTPException(503,"篮球监测尚未配置 BALLDONTLIE_API_KEY")
     try:min_interval=max(0.0,float(os.getenv("BALLDONTLIE_MIN_INTERVAL_SECONDS","12.5")))
@@ -193,12 +203,12 @@ def balldontlie_api(endpoint,params=None):
         wait=min_interval-(time.monotonic()-BALLDONTLIE_LAST_REQUEST)
         if wait>0:time.sleep(wait)
         BALLDONTLIE_LAST_REQUEST=time.monotonic()
-        url="https://api.balldontlie.io/nba/v1/"+str(endpoint).lstrip("/")
+        url="https://api.balldontlie.io/"+league_code+"/v1/"+str(endpoint).lstrip("/")
         if params:url+="?"+urllib.parse.urlencode(params,doseq=True)
         try:
             result=request_json(url,{"Authorization":key})
         except urllib.error.HTTPError as error:
-            if error.code==401:raise HTTPException(503,"BallDontLie API Key 无效或当前账号无权访问 NBA 比赛数据") from error
+            if error.code==401:raise HTTPException(503,f"BallDontLie API Key 无效或当前账号无权访问 {league_code.upper()} 比赛数据") from error
             if error.code==429:raise HTTPException(503,"BallDontLie 请求达到服务方限额，请稍后重试") from error
             raise HTTPException(502,f"BallDontLie 暂时无法提供比赛数据（HTTP {error.code}）") from error
         except urllib.error.URLError as error:
@@ -242,35 +252,37 @@ def _bdl_datetime(value):
         return parsed
     except (TypeError,ValueError):return None
 
-def basketball_fixtures(date_value,q=""):
+def basketball_fixtures(date_value,q="",league_code="nba"):
+    league_code=str(league_code or "nba").lower()
+    if league_code not in BALLDONTLIE_GAME_ID_BASE:raise HTTPException(422,"Basketball league must be nba or wnba")
     try:
         day=datetime.fromisoformat(date_value+"T00:00:00+08:00")
     except (TypeError,ValueError):raise HTTPException(422,"比赛日期无效")
     end=day+timedelta(days=1)
     api_start=day.astimezone(timezone.utc).date().isoformat()
     api_end=(end-timedelta(microseconds=1)).astimezone(timezone.utc).date().isoformat()
-    result=balldontlie_api("games",{"start_date":api_start,"end_date":api_end,"per_page":100})
+    result=balldontlie_api("games",{"start_date":api_start,"end_date":api_end,"per_page":100},league_code)
     games=result.get("data")
-    if not isinstance(games,list):raise HTTPException(502,"BallDontLie 返回的 NBA 赛程格式无效")
+    if not isinstance(games,list):raise HTTPException(502,f"BallDontLie 返回的 {league_code.upper()} 赛程格式无效")
     term=str(q or "").strip().casefold()
     matches=[]
     for game in games:
-        kickoff=_bdl_datetime(game.get("datetime"))
+        kickoff=_bdl_datetime(game.get("datetime") or game.get("date"))
         if kickoff is None:continue
         local_kickoff=kickoff.astimezone(TZ)
         if not day.date()<=local_kickoff.date()<end.date():continue
         home=(game.get("home_team") or {}).get("full_name") or ""
         away=(game.get("visitor_team") or {}).get("full_name") or ""
         def team_matches(name):
-            return not term or term in name.casefold() or term in NBA_TEAM_NAMES_ZH.get(name,"").casefold()
+            return not term or term in name.casefold() or term in BASKETBALL_TEAM_NAMES_ZH.get(name,"").casefold()
         if not (team_matches(home) or team_matches(away)):continue
         state=_bdl_state(game)
         postseason=bool(game.get("postseason"))
-        league="NBA季后赛" if postseason else "NBA杯" if game.get("ist_stage") else "NBA"
+        league_name=("WNBA季后赛" if postseason else "WNBA") if league_code=="wnba" else "NBA季后赛" if postseason else "NBA杯" if game.get("ist_stage") else "NBA"
         raw_status=str(game.get("status") or "")
         matches.append({"id":int(game["id"]),"provider_id":int(game["id"]),"sport":"basketball",
-            "home":home,"home_cn":NBA_TEAM_NAMES_ZH.get(home,""),"away":away,"away_cn":NBA_TEAM_NAMES_ZH.get(away,""),
-            "league_name":league,"kickoff":kickoff.isoformat(),"status":state,"status_cn":_bdl_status_cn(state,raw_status)})
+            "league_code":league_code,"home":home,"home_cn":BASKETBALL_TEAM_NAMES_ZH.get(home,""),"away":away,"away_cn":BASKETBALL_TEAM_NAMES_ZH.get(away,""),
+            "league_name":league_name,"kickoff":kickoff.isoformat(),"status":state,"status_cn":_bdl_status_cn(state,raw_status)})
     return sorted(matches,key=lambda row:row["kickoff"])
 
 def notify(message):
@@ -288,6 +300,23 @@ def score_category(home,away,listed_scores=None):
     exact_scores=LISTED_SCORE_OPTIONS if listed_scores is None else set(listed_scores)
     return score if score in exact_scores else ("胜其他" if home>away else "负其他" if home<away else "平其他")
 
+def basketball_margin_result(home,away):
+    margin=abs(int(home)-int(away))
+    band="1-5" if margin<=5 else "6-10" if margin<=10 else "11-15" if margin<=15 else "16-20" if margin<=20 else "21-25" if margin<=25 else "26+"
+    return ("主胜" if home>away else "客胜")+band+"分" if margin else None
+
+def normalize_basketball_margin_selection(value):
+    raw=str(value or "").strip().replace(" ","").replace("　","").replace("：",":")
+    match=re.fullmatch(r"(主胜|客胜|主队胜|客队胜)(1-5|6-10|11-15|16-20|21-25|26\+|26分以上|26分及以上)分?",raw)
+    if not match:return None
+    side="主胜" if match.group(1) in {"主胜","主队胜"} else "客胜"
+    band="26+" if match.group(2).startswith("26") else match.group(2)
+    return side+band+"分"
+
+def is_half_point_line(value):
+    try:return abs(Decimal(str(value))*2)%Decimal(2)==Decimal(1)
+    except Exception:return False
+
 def ticket_matches(ticket,home,away,half_home=None,half_away=None,listed_scores=None):
     if home is None or away is None: return None
     market=ticket.get("market","correct_score")
@@ -299,6 +328,21 @@ def ticket_matches(ticket,home,away,half_home=None,half_away=None,listed_scores=
     if market=="half_full":
         if half_home is None or half_away is None: return None
         return selection==score_result(half_home,half_away)+score_result(home,away)
+    if market=="basketball_result":
+        result="胜" if home>away else "负" if home<away else None
+        return selection==result if result else None
+    if market=="basketball_handicap":
+        adjusted=Decimal(str(home))+Decimal(str(ticket["handicap"]))
+        opponent=Decimal(str(away))
+        result="胜" if adjusted>opponent else "负" if adjusted<opponent else None
+        return selection==result if result else None
+    if market=="basketball_total":
+        total=Decimal(str(home+away));line=Decimal(str(ticket["line"]))
+        result="大" if total>line else "小" if total<line else None
+        return selection==result if result else None
+    if market=="basketball_margin":
+        result=basketball_margin_result(home,away)
+        return normalize_basketball_margin_selection(selection)==result if result else None
     return False
 
 def outcome(home,away,tickets,half_home=None,half_away=None,listed_scores=None):
@@ -320,7 +364,7 @@ def outcome(home,away,tickets,half_home=None,half_away=None,listed_scores=None):
         else:
             group["payout"]+=amount
         rows.append({"index":index,"market":market,"market_label":MARKETS.get(market,"未知玩法"),
-            "selection":t["selection"],"handicap":t.get("handicap"),"stake":float(stake),"share_pct":float((stake*100/total).quantize(Decimal("0.01"),rounding=ROUND_HALF_UP)) if total else 0,
+            "selection":t["selection"],"handicap":t.get("handicap"),"line":t.get("line"),"stake":float(stake),"share_pct":float((stake*100/total).quantize(Decimal("0.01"),rounding=ROUND_HALF_UP)) if total else 0,
             "odds":float(t["odds"]),"won":won,"payout":float(amount.quantize(Decimal("0.01"),rounding=ROUND_HALF_UP))})
     money=lambda n:float(n.quantize(Decimal("0.01"),rounding=ROUND_HALF_UP))
     market_summaries=[{"market":g["market"],"market_label":g["market_label"],"total":money(g["total"]),"payout":money(g["payout"]),
@@ -346,24 +390,24 @@ def tick(task):
         return _tick(dict(current))
 
 def _tick_basketball(task):
-    if json.loads(task.get("ticket_json") or "[]"):
-        raise RuntimeError("Basketball score monitoring does not settle soccer ticket markets")
-    provider_id=int(task.get("provider_game_id") or (int(task["fixture_id"])-BALLDONTLIE_GAME_ID_BASE))
-    payload=balldontlie_api(f"games/{provider_id}")
+    league_code=str(task.get("league_code") or "nba").lower()
+    if league_code not in BALLDONTLIE_GAME_ID_BASE:raise RuntimeError("Basketball league metadata is invalid")
+    provider_id=int(task.get("provider_game_id") or (int(task["fixture_id"])-BALLDONTLIE_GAME_ID_BASE[league_code]))
+    payload=balldontlie_api(f"games/{provider_id}",league_code=league_code)
     game=payload.get("data")
-    if not isinstance(game,dict) or int(game.get("id",0))!=provider_id:raise RuntimeError("NBA game unavailable from BallDontLie")
+    if not isinstance(game,dict) or int(game.get("id",0))!=provider_id:raise RuntimeError(f"{league_code.upper()} game unavailable from BallDontLie")
     home=(game.get("home_team") or {}).get("full_name") or ""
     away=(game.get("visitor_team") or {}).get("full_name") or ""
-    if home!=task["home"] or away!=task["away"]:raise RuntimeError("NBA team mismatch from BallDontLie")
+    if home!=task["home"] or away!=task["away"]:raise RuntimeError(f"{league_code.upper()} team mismatch from BallDontLie")
     state=_bdl_state(game)
     raw_status=str(game.get("status") or "")
     provider_status=state+"|"+_bdl_status_cn(state,raw_status)
-    home_score=game.get("home_team_score")
-    away_score=game.get("visitor_team_score")
+    home_score=game.get("home_team_score") if league_code=="nba" else game.get("home_score")
+    away_score=game.get("visitor_team_score") if league_code=="nba" else game.get("away_score")
     score=None
     if state in {"in_progress","final"} and home_score is not None and away_score is not None:
         score=f"{int(home_score)}:{int(away_score)}"
-    if state=="final" and score is None:raise RuntimeError("Final NBA game has no final score")
+    if state=="final" and score is None:raise RuntimeError(f"Final {league_code.upper()} game has no final score")
     closed=state=="final"
     requires_review=state in {"canceled","abandoned"}
     now=datetime.now(timezone.utc)
@@ -371,16 +415,22 @@ def _tick_basketball(task):
     status_text=_bdl_status_cn(state,raw_status)
     clock=str(game.get("time") or "").strip()
     clock_text=f" · 剩余 {clock}" if state=="in_progress" and clock else ""
-    competition="NBA季后赛" if bool(game.get("postseason")) else "NBA杯" if game.get("ist_stage") else "NBA"
-    message=(f"{'🏁 NBA 比赛结束' if closed else '🏀 NBA 赛况更新'}\n{home} {score or '—'} {away}\n"
-        f"状态：{status_text}{clock_text}\n赛事：{competition}")
+    league_label="WNBA" if league_code=="wnba" else "NBA"
+    competition=("WNBA季后赛" if bool(game.get("postseason")) else "WNBA") if league_code=="wnba" else "NBA季后赛" if bool(game.get("postseason")) else "NBA杯" if game.get("ist_stage") else "NBA"
+    tickets=json.loads(task.get("ticket_json") or "[]")
+    result=outcome(int(home_score) if home_score is not None else None,int(away_score) if away_score is not None else None,tickets)
+    if requires_review:result={"selection":None,"payout":0,"net":None,"total":result["total"],"tickets":[],"pending_tickets":len(tickets)}
+    calc=("仅监测比分，未设置竞彩篮球投注" if not tickets else
+        f"按当前比分试算：返奖 ¥{result.get('payout',0):.2f}" if result.get("has_score") else "尚无比分，暂不结算")
+    message=(f"{'🏁' if closed else '🏀'} {league_label} 比赛{'结束' if closed else '赛况更新'}\n{home} {score or '—'} {away}\n"
+        f"状态：{status_text}{clock_text}\n赛事：{competition}\n{calc}")
     if requires_review:message+="\n比赛已取消或中止，请核对官方状态；系统不会自动结算。"
     elif closed:message+="\n终场比分已记录，比分监测已结束。"
-    else:message+="\n该任务只监测篮球比分，不进行竞彩投注结算。"
+    elif tickets:message+="\n命中投注："+("；".join(f"{r['market_label']} {r['selection']} ¥{r['stake']:g} → 返奖 ¥{r['payout']:.2f}" for r in result["tickets"] if r["won"] is True) or "当前暂无命中")
     changed=task.get("last_score")!=score or task.get("provider_status")!=provider_status
     if changed or closed:notify(message)
     task_status="review_required" if requires_review else "finished" if closed else "running"
-    kickoff=_bdl_datetime(game.get("datetime"))
+    kickoff=_bdl_datetime(game.get("datetime") or game.get("date"))
     kickoff_value=kickoff.isoformat() if kickoff else None
     with conn() as c:
         c.execute("""UPDATE tasks SET kickoff=COALESCE(?,kickoff),last_score=?,settlement_score=?,provider_status=?,last_check=?,next_check=?,status=?,
@@ -497,11 +547,13 @@ class Ticket(BaseModel):
     market:str="correct_score"
     stake:float=Field(gt=0,allow_inf_nan=False)
     odds:float=Field(ge=1,allow_inf_nan=False)
-    handicap:int|None=None
+    handicap:float|None=Field(default=None,allow_inf_nan=False)
+    line:float|None=Field(default=None,allow_inf_nan=False)
 
 class TaskIn(BaseModel):
     fixture_id:int=Field(gt=0)
     sport:Literal["football","basketball"]="football"
+    league_code:Literal["nba","wnba"]="nba"
     home:str
     away:str
     kickoff:str|None=None
@@ -540,15 +592,31 @@ class ParlayIn(BaseModel):
 class ConfirmVoidIn(BaseModel):
     confirmed:bool
 
-def validate_tickets(items):
+def validate_tickets(items,sport="football"):
     if len(items)>1000: raise HTTPException(422,"Too many tickets")
+    soccer_markets=set(MARKETS)-BASKETBALL_MARKETS
     for t in items:
-        if t.market not in MARKETS: raise HTTPException(422,f"Unsupported market: {t.market}")
-        valid={"correct_score":t.selection in SCORES,"match_result":t.selection in RESULTS,"handicap":t.selection in RESULTS and t.handicap is not None and -9<=t.handicap<=9,
-            "total_goals":t.selection in TOTAL_GOALS,"half_full":t.selection in HALF_FULL}[t.market]
+        allowed=BASKETBALL_MARKETS if sport=="basketball" else soccer_markets
+        if t.market not in allowed: raise HTTPException(422,f"Unsupported {sport} market: {t.market}")
+        if sport=="basketball":
+            if t.market=="basketball_result":valid=t.selection in {"胜","负"} and t.handicap is None and t.line is None
+            elif t.market=="basketball_handicap":valid=t.selection in {"胜","负"} and t.handicap is not None and is_half_point_line(t.handicap) and t.line is None
+            elif t.market=="basketball_total":valid=t.selection in {"大","小"} and t.line is not None and is_half_point_line(t.line) and t.handicap is None
+            else:valid=normalize_basketball_margin_selection(t.selection) is not None and t.handicap is None and t.line is None
+        else:
+            valid={"correct_score":t.selection in SCORES,"match_result":t.selection in RESULTS,
+                "handicap":t.selection in RESULTS and t.handicap is not None and t.handicap.is_integer() and -9<=t.handicap<=9 and t.line is None,
+                "total_goals":t.selection in TOTAL_GOALS and t.handicap is None and t.line is None,
+                "half_full":t.selection in HALF_FULL and t.handicap is None and t.line is None}[t.market]
         if not valid: raise HTTPException(422,f"Invalid selection for {MARKETS[t.market]}: {t.selection}")
         if Decimal(str(t.stake))%Decimal("2"): raise HTTPException(422,"Stake must be a positive multiple of ¥2")
-    return [t.model_dump(exclude_none=True) for t in items]
+    result=[]
+    for t in items:
+        row=t.model_dump(exclude_none=True)
+        if sport=="basketball" and t.market=="basketball_margin":row["selection"]=normalize_basketball_margin_selection(t.selection)
+        if sport=="football" and t.market=="handicap":row["handicap"]=int(t.handicap)
+        result.append(row)
+    return result
 
 def validate_listed_scores(items):
     if items is None: return None
@@ -745,8 +813,9 @@ def health(_:str=Depends(auth)):
         "parlay_monitoring":True,"basketball_monitoring":bool(balldontlie_key())}
 
 @app.get("/api/fixtures")
-def fixtures(date:str=Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),q:str="",sport:Literal["football","basketball"]="football",_:str=Depends(auth)):
-    if sport=="basketball":return basketball_fixtures(date,q)
+def fixtures(date:str=Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),q:str="",sport:Literal["football","basketball"]="football",
+             league_code:Literal["nba","wnba"]="nba",_:str=Depends(auth)):
+    if sport=="basketball":return basketball_fixtures(date,q,league_code)
     matches=api("fixtures",{"date":date,"timezone":"Asia/Shanghai"})
     term=q.strip().casefold()
     search_terms=[term] if term else []
@@ -810,8 +879,8 @@ def tasks(_:str=Depends(auth)):
         x["settlement"]["final"]=x["status"]=="finished"
         x["status_cn"]=TASK_STATUS_CN.get(x["status"],x["status"])
         if x.get("sport")=="basketball":
-            x["home_cn"]=NBA_TEAM_NAMES_ZH.get(x["home"],"")
-            x["away_cn"]=NBA_TEAM_NAMES_ZH.get(x["away"],"")
+            x["home_cn"]=BASKETBALL_TEAM_NAMES_ZH.get(x["home"],"")
+            x["away_cn"]=BASKETBALL_TEAM_NAMES_ZH.get(x["away"],"")
             state,_,raw_status=str(x.get("provider_status") or "").partition("|")
             x["game_status_cn"]=(raw_status or _bdl_status_cn(state)) if state else "等待首次查询"
 
@@ -949,30 +1018,32 @@ def stop_unused_parlay_watchers(fixture_ids):
 
 @app.post("/api/tasks")
 def create_task(data:TaskIn,_:str=Depends(auth)):
-    tickets=validate_tickets(data.tickets)
+    tickets=validate_tickets(data.tickets,data.sport)
     listed_scores=validate_listed_scores(data.listed_scores)
-    validate_score_metadata(tickets,listed_scores,data.listed_scores_verified)
-    if data.sport=="basketball" and (tickets or listed_scores is not None or data.listed_scores_verified):
-        raise HTTPException(422,"篮球任务目前只监测比分，暂不支持足球竞彩投注项")
+    if data.sport=="basketball":
+        if listed_scores is not None or data.listed_scores_verified:raise HTTPException(422,"竞彩比分清单只适用于足球任务")
+    else:validate_score_metadata(tickets,listed_scores,data.listed_scores_verified)
     try:
         start=datetime.fromisoformat(data.start_at)
         if start.tzinfo is None:raise ValueError()
     except ValueError:raise HTTPException(422,"start_at must include timezone offset")
     if data.sport=="basketball":
-        if data.fixture_id>=BALLDONTLIE_GAME_ID_BASE:raise HTTPException(422,"BallDontLie 比赛 ID 无效")
-        payload=balldontlie_api(f"games/{data.fixture_id}")
+        league_code=data.league_code
+        namespace=BALLDONTLIE_GAME_ID_BASE[league_code]
+        if data.fixture_id>=namespace:raise HTTPException(422,"BallDontLie 比赛 ID 无效")
+        payload=balldontlie_api(f"games/{data.fixture_id}",league_code=league_code)
         fixture=payload.get("data")
-        if not isinstance(fixture,dict) or int(fixture.get("id",0))!=data.fixture_id:raise HTTPException(422,"NBA 比赛无法在 BallDontLie 中核实")
+        if not isinstance(fixture,dict) or int(fixture.get("id",0))!=data.fixture_id:raise HTTPException(422,f"{league_code.upper()} 比赛无法在 BallDontLie 中核实")
         home=(fixture.get("home_team") or {}).get("full_name") or ""
         away=(fixture.get("visitor_team") or {}).get("full_name") or ""
-        if home!=data.home or away!=data.away:raise HTTPException(422,"NBA 比赛队伍与 BallDontLie 返回结果不一致")
-        kickoff=_bdl_datetime(fixture.get("datetime"))
-        if kickoff is None:raise HTTPException(422,"BallDontLie 尚未提供该 NBA 比赛的准确开赛时间")
+        if home!=data.home or away!=data.away:raise HTTPException(422,f"{league_code.upper()} 比赛队伍与 BallDontLie 返回结果不一致")
+        kickoff=_bdl_datetime(fixture.get("datetime") or fixture.get("date"))
+        if kickoff is None:raise HTTPException(422,f"BallDontLie 尚未提供该 {league_code.upper()} 比赛的准确开赛时间")
         kickoff_value=kickoff.isoformat()
-        league_name="NBA季后赛" if bool(fixture.get("postseason")) else "NBA杯" if fixture.get("ist_stage") else "NBA"
+        league_name=("WNBA季后赛" if bool(fixture.get("postseason")) else "WNBA") if league_code=="wnba" else "NBA季后赛" if bool(fixture.get("postseason")) else "NBA杯" if fixture.get("ist_stage") else "NBA"
         sport="basketball"
         provider_game_id=str(data.fixture_id)
-        internal_fixture_id=BALLDONTLIE_GAME_ID_BASE+data.fixture_id
+        internal_fixture_id=namespace+data.fixture_id
     else:
         # Confirm match identity from the provider; never trust just the browser's team names.
         rows=api("fixtures",{"id":data.fixture_id,"timezone":"Asia/Shanghai"})
@@ -984,25 +1055,26 @@ def create_task(data:TaskIn,_:str=Depends(auth)):
         sport="football"
         provider_game_id=str(data.fixture_id)
         internal_fixture_id=data.fixture_id
+        league_code=None
     now=datetime.now(timezone.utc).isoformat()
     next_at=max(start.astimezone(timezone.utc).isoformat(),now)
     with conn() as c:
         try:
-            cur=c.execute("""INSERT INTO tasks(fixture_id,provider_game_id,sport,home,away,league_name,kickoff,start_at,interval_minutes,next_check,ticket_json,listed_scores_json,listed_scores_verified,created_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(internal_fixture_id,provider_game_id,sport,home,away,league_name,kickoff_value,start.isoformat(),data.interval_minutes,next_at,json.dumps(tickets,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(data.listed_scores_verified),now))
+            cur=c.execute("""INSERT INTO tasks(fixture_id,provider_game_id,league_code,sport,home,away,league_name,kickoff,start_at,interval_minutes,next_check,ticket_json,listed_scores_json,listed_scores_verified,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(internal_fixture_id,provider_game_id,league_code,sport,home,away,league_name,kickoff_value,start.isoformat(),data.interval_minutes,next_at,json.dumps(tickets,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(data.listed_scores_verified),now))
         except sqlite3.IntegrityError:raise HTTPException(409,"Fixture already monitored")
-    return {"id":cur.lastrowid,"home":home,"away":away,"sport":sport}
+    return {"id":cur.lastrowid,"home":home,"away":away,"sport":sport,"league_code":league_code}
 
 @app.put("/api/tasks/{task_id}/tickets")
 def update_tickets(task_id:int,data:list[Ticket]|TicketUpdateIn,_:str=Depends(auth)):
     tickets=data if isinstance(data,list) else data.tickets
-    values=validate_tickets(tickets)
     with TASK_LOCK:
         with conn() as c:
             existing=c.execute("SELECT sport,listed_scores_json,listed_scores_verified FROM tasks WHERE id=?",(task_id,)).fetchone()
             if not existing:raise HTTPException(404,"Task not found")
-            if existing["sport"]=="basketball" and (values or (isinstance(data,TicketUpdateIn) and (data.listed_scores is not None or data.listed_scores_verified is True))):
-                raise HTTPException(422,"篮球任务目前只监测比分，暂不支持足球竞彩投注项")
+            values=validate_tickets(tickets,existing["sport"])
+            if existing["sport"]=="basketball" and isinstance(data,TicketUpdateIn) and (data.listed_scores is not None or data.listed_scores_verified is True):
+                raise HTTPException(422,"竞彩比分清单只适用于足球任务")
             if isinstance(data,list):
                 listed_scores=json.loads(existing["listed_scores_json"]) if existing["listed_scores_json"] else None
                 verified=bool(existing["listed_scores_verified"])
@@ -1107,6 +1179,10 @@ def parlay_ui(_:str=Depends(auth)):
 @app.get("/teams-map.js")
 def teams_map(_:str=Depends(auth)):
     return FileResponse(Path(__file__).with_name("teams-map.js"),media_type="application/javascript",headers={"Cache-Control":"no-store"})
+
+@app.get("/basketball-teams.js")
+def basketball_teams(_:str=Depends(auth)):
+    return FileResponse(Path(__file__).with_name("basketball-teams.js"),media_type="application/javascript",headers={"Cache-Control":"no-store"})
 
 @lru_cache(maxsize=1)
 def team_directory_by_id():

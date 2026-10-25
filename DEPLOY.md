@@ -25,7 +25,7 @@ chmod 600 .env
 nano .env
 ```
 
-设置新的强密码、API-Football Key、Telegram Token/Chat ID；如需 NBA 监测，再设置 BallDontLie API Key。初期将 `ENABLE_POLLER=false`，仅验证页面。不要把密钥放入 Git。
+设置新的强密码、API-Football Key、Telegram Token/Chat ID；如需 NBA / WNBA 监测，再设置 BallDontLie API Key，并确认该账户有对应联赛的数据权限。BallDontLie 的不同运动项目订阅权限分别计算。初期将 `ENABLE_POLLER=false`，仅验证页面。不要把密钥放入 Git。
 
 ## systemd（仅新建 sportsmatch-web，不覆盖原服务）
 
@@ -67,7 +67,7 @@ ssh -L 8765:127.0.0.1:8765 root@YOUR_SERVER
 ## 数据与限制
 
 - SQLite 默认路径 `/opt/sportsmatch/data/matches.sqlite3`。
-- NBA 搜索与比分监测使用 `BALLDONTLIE_API_KEY`；密钥只配置在后端 `/opt/sportsmatch/.env`。篮球任务目前仅采集比分和比赛状态，不支持竞彩足球投注结算或过关票。
+- NBA / WNBA 搜索与比分监测使用 `BALLDONTLIE_API_KEY`；密钥只配置在后端 `/opt/sportsmatch/.env`。篮球首次监测默认设为开赛后 2 小时 30 分。单场支持竞彩篮球胜负、让分胜负、大小分、胜分差结算；过关票目前仍只支持足球玩法。
 - `BALLDONTLIE_MIN_INTERVAL_SECONDS` 默认是 `12.5` 秒，按官方免费档每分钟最多 5 次请求设置。多个监测任务会共用此限速，实际更新间隔可能长于单个任务设置的频率。
 - 创建任务时将查询一次比赛进行校验；搜索同样消耗 API 配额。
 - 查询频率不保证API实时刷新频率，比分是第三方数据，无法保障彩票奖金结算。
@@ -99,7 +99,7 @@ curl --fail-with-body -sS --user matchmonitor https://sportsmatch.sendmymail.top
 curl --fail-with-body -sS --user matchmonitor https://sportsmatch.sendmymail.top/api/health
 ```
 
-`curl` 会提示输入服务密码；不要把密码贴到聊天中。若需要启用篮球监测，在 `.env` 中填入真实 `BALLDONTLIE_API_KEY`（保留 `BALLDONTLIE_MIN_INTERVAL_SECONDS=12.5`），然后重启本服务；不要把密钥发到浏览器或提交到 Git。`/api/health` 返回 `basketball_monitoring: true` 后，页面才会启用 NBA 搜索。此次数据库迁移会增加 `sport`、`provider_game_id` 字段并为旧足球任务回填供应商 ID；不会删除任务或投注数据。NBA 赛程按北京时间筛选，任务轮询并通知比分、节次和终场；取消或中止的比赛标记为待人工确认，不自动结算。篮球任务不支持竞彩投注或过关票。任何情况下都不要停止、重启、覆盖或修改 `napoli-monitor.service`。
+curl 会提示输入服务密码；不要把密码贴到聊天中。启用篮球监测时，在 .env 中配置真实 BALLDONTLIE_API_KEY（保留 BALLDONTLIE_MIN_INTERVAL_SECONDS=12.5），并确认该账号分别有 NBA 和 WNBA API 权限，然后重启本服务。不要把密钥发到浏览器或提交到 Git。/api/health 返回 basketball_monitoring: true 后，页面启用 NBA / WNBA 搜索。数据库迁移新增 sport、provider_game_id、league_code 字段，为旧篮球任务补为 NBA，并为旧足球任务回填供应商 ID；不会删除任务或投注数据。NBA / WNBA 赛程按北京时间筛选；后台读取各自的终场比分，按票面 SP、让分与总分结算胜负、让分胜负和大小分，胜分差按主客队分差区间结算。让分和大小分按票面半分值录入。取消或中止的比赛标记为待人工确认，不自动结算。球队中文名和官方 CDN 队徽由 basketball-teams.js 维护。过关票暂仍限足球玩法。任何情况下都不要停止、重启、覆盖或修改 napoli-monitor.service。
 
 截图仅在浏览器本地处理，不会提交给 Sites Worker、FastAPI 或 API-Football。浏览器首次识别需联网下载固定版本的 Tesseract.js OCR 引擎和中文模型；CDN 不可用时可手动填写。用户需要逐项核对 OCR 给出的玩法、选项、SP，以及用于“其他”判定的完整精确比分 SP 清单。服务端自动迁移新增 SQLite 字段；完成拉取后只重启 `sportsmatch-web.service`。不要改动 `napoli-monitor.service`。
 
