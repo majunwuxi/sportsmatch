@@ -25,7 +25,7 @@ chmod 600 .env
 nano .env
 ```
 
-设置新的强密码、API Key、Telegram Token/Chat ID；初期将 `ENABLE_POLLER=false`，仅验证页面。不要把密钥放入 Git。
+设置新的强密码、API-Football Key、Telegram Token/Chat ID；如需 NBA 监测，再设置 BallDontLie API Key。初期将 `ENABLE_POLLER=false`，仅验证页面。不要把密钥放入 Git。
 
 ## systemd（仅新建 sportsmatch-web，不覆盖原服务）
 
@@ -67,6 +67,8 @@ ssh -L 8765:127.0.0.1:8765 root@YOUR_SERVER
 ## 数据与限制
 
 - SQLite 默认路径 `/opt/sportsmatch/data/matches.sqlite3`。
+- NBA 搜索与比分监测使用 `BALLDONTLIE_API_KEY`；密钥只配置在后端 `/opt/sportsmatch/.env`。篮球任务目前仅采集比分和比赛状态，不支持竞彩足球投注结算或过关票。
+- `BALLDONTLIE_MIN_INTERVAL_SECONDS` 默认是 `12.5` 秒，按官方免费档每分钟最多 5 次请求设置。多个监测任务会共用此限速，实际更新间隔可能长于单个任务设置的频率。
 - 创建任务时将查询一次比赛进行校验；搜索同样消耗 API 配额。
 - 查询频率不保证API实时刷新频率，比分是第三方数据，无法保障彩票奖金结算。
 - 单场监测支持胜平负、让球胜平负、比分（31项）、总进球和半全场结果。过关票使用独立组合记录，可添加2–8场比赛腿，支持已实现的竞彩过关方式，按系统组合逐注结算。
@@ -89,6 +91,7 @@ Match Monitor 的 Python 后台在 `/opt/sportsmatch`，与 Napoli 旧服务隔�
 cd /opt/sportsmatch
 sudo git status --short
 sudo git pull --ff-only origin main
+sudo nano /opt/sportsmatch/.env
 sudo systemctl restart sportsmatch-web.service
 sudo systemctl is-active sportsmatch-web.service
 curl --fail-with-body -sS --user matchmonitor https://sportsmatch.sendmymail.top/ocr-parser.js -o /dev/null -w 'OCR parser HTTP %{http_code}\n'
@@ -96,7 +99,7 @@ curl --fail-with-body -sS --user matchmonitor https://sportsmatch.sendmymail.top
 curl --fail-with-body -sS --user matchmonitor https://sportsmatch.sendmymail.top/api/health
 ```
 
-`curl` 会提示输入服务密码；不要把密码贴到聊天中。新增 `/ocr-parser.js` 和 `/ocr-ui.js` 两个受 HTTP Basic 保护的路由。两个脚本及 `/api/health` 都应返回 HTTP 200。任务列表更新会为既有 SQLite 数据库添加 `finished_at` 字段，并用原有 `last_check` 回填已完赛任务；其他版本还新增过 `listed_scores_json`、`listed_scores_verified` 字段。此版本自动添加 `league_name`，保存 API-Football 返回的赛事名称，供任务卡片和投注图片区分青年赛事与一线队赛事；已有任务会在下一次正常轮询时补存该名称。搜索和按比赛 ID 校验都请求 `timezone=Asia/Shanghai`，投注图片将标明赛事和北京时间。不会删除任务或投注数据。截图识别导出的投注 JSON 会另附完整的带 SP 精确比分清单；选择“胜其它／负其它”时，需确认清单完整，后台才按“终场比分不在清单中”判定是否命中。没有截图清单的旧 JSON 继续使用标准竞彩比分表兼容结算。未来开赛且等待/暂停中的比赛按开始时间升序显示；后台首次确认完赛满 24 小时后，该任务会从列表隐藏。任何情况下都不要停止、重启、覆盖或修改 `napoli-monitor.service`。
+`curl` 会提示输入服务密码；不要把密码贴到聊天中。若需要启用篮球监测，在 `.env` 中填入真实 `BALLDONTLIE_API_KEY`（保留 `BALLDONTLIE_MIN_INTERVAL_SECONDS=12.5`），然后重启本服务；不要把密钥发到浏览器或提交到 Git。`/api/health` 返回 `basketball_monitoring: true` 后，页面才会启用 NBA 搜索。此次数据库迁移会增加 `sport`、`provider_game_id` 字段并为旧足球任务回填供应商 ID；不会删除任务或投注数据。NBA 赛程按北京时间筛选，任务轮询并通知比分、节次和终场；取消或中止的比赛标记为待人工确认，不自动结算。篮球任务不支持竞彩投注或过关票。任何情况下都不要停止、重启、覆盖或修改 `napoli-monitor.service`。
 
 截图仅在浏览器本地处理，不会提交给 Sites Worker、FastAPI 或 API-Football。浏览器首次识别需联网下载固定版本的 Tesseract.js OCR 引擎和中文模型；CDN 不可用时可手动填写。用户需要逐项核对 OCR 给出的玩法、选项、SP，以及用于“其他”判定的完整精确比分 SP 清单。服务端自动迁移新增 SQLite 字段；完成拉取后只重启 `sportsmatch-web.service`。不要改动 `napoli-monitor.service`。
 

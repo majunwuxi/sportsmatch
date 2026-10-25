@@ -1,6 +1,6 @@
 # Match Monitor
 
-A Chinese-language football match monitoring dashboard using API-Football and Telegram, with persisted single-match tasks and multi-leg Chinese Sports Lottery settlement.
+A Chinese-language football and NBA match monitoring dashboard using API-Football, BallDontLie, and Telegram, with persisted match tasks and multi-leg Chinese Sports Lottery settlement for football.
 
 ## Status
 
@@ -9,6 +9,7 @@ The dashboard is published as an owner-private ChatGPT Site. Its always-on sched
 ## Features
 
 - Search fixtures by date and team name using API-Football; show the competition to distinguish youth and senior teams
+- Search NBA games by date and team in English or Chinese through BallDontLie; monitor scores and game status only, without football lottery settlement
 - Request and store fixture kickoff timestamps in `Asia/Shanghai`; display every kickoff with an explicit Beijing-time label
 - Create monitoring tasks with start time (Asia/Shanghai) and interval; multiple matches supported
 - Create standalone pass-ticket monitors by adding match legs from fixture search or parsing ticket/OCR text into a review table; bind every leg to an API-Football fixture before creating it
@@ -22,6 +23,7 @@ The dashboard is published as an owner-private ChatGPT Site. Its always-on sched
 - Show live scores separately from the 90-minute settlement score so extra time and penalties do not change JCZQ results
 - Check scores on a persistent SQLite-backed schedule; Telegram alerts at first check, score changes, and full time
 - HTTP Basic authentication; API keys only from server environment variables
+- Keep BallDontLie requests at least 12.5 seconds apart to stay within its documented Free-plan rate limit
 - API daily call budget guard and graceful error recording
 
 See `.env.example`, `app.py` and `DEPLOY.md`.

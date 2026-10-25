@@ -1,4 +1,4 @@
-import os, json, time, sqlite3, threading, urllib.request, urllib.parse, http.client, ipaddress, socket, ssl, re, math
+import os, json, time, sqlite3, threading, urllib.request, urllib.parse, urllib.error, http.client, ipaddress, socket, ssl, re, math
 from itertools import combinations
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 import secrets
 import base64
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Literal
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
@@ -21,6 +22,8 @@ DB.parent.mkdir(parents=True, exist_ok=True)
 BASIC=HTTPBasic()
 STOP=threading.Event()
 LOCK=threading.Lock()
+BALLDONTLIE_LOCK=threading.Lock()
+BALLDONTLIE_LAST_REQUEST=0.0
 TASK_LOCK=threading.RLock()
 POLL_ENABLED=os.getenv("ENABLE_POLLER","false").lower()=="true"
 LISTED_WINS={"1:0","2:0","2:1","3:0","3:1","3:2","4:0","4:1","4:2","5:0","5:1","5:2"}
@@ -36,6 +39,19 @@ RESULTS={"胜","平","负"}
 HALF_FULL={a+b for a in RESULTS for b in RESULTS}
 TOTAL_GOALS={"0","1","2","3","4","5","6","7+"}
 STATUS_CN={"TBD":"待定","NS":"未开赛","1H":"上半场","HT":"中场休息","2H":"下半场","ET":"加时赛","BT":"加时赛休息","P":"点球大战","SUSP":"暂停","INT":"中断","FT":"完场","AET":"加时赛结束","PEN":"点球结束","PST":"延期","CANC":"已取消","ABD":"比赛中止","AWD":"判定赛果","WO":"弃权"}
+BALLDONTLIE_GAME_ID_BASE=1_000_000_000_000
+NBA_TEAM_NAMES_ZH={
+    "Atlanta Hawks":"亚特兰大老鹰","Boston Celtics":"波士顿凯尔特人","Brooklyn Nets":"布鲁克林篮网",
+    "Charlotte Hornets":"夏洛特黄蜂","Chicago Bulls":"芝加哥公牛","Cleveland Cavaliers":"克利夫兰骑士",
+    "Dallas Mavericks":"达拉斯独行侠","Denver Nuggets":"丹佛掘金","Detroit Pistons":"底特律活塞",
+    "Golden State Warriors":"金州勇士","Houston Rockets":"休斯敦火箭","Indiana Pacers":"印第安纳步行者",
+    "Los Angeles Clippers":"洛杉矶快船","Los Angeles Lakers":"洛杉矶湖人","Memphis Grizzlies":"孟菲斯灰熊",
+    "Miami Heat":"迈阿密热火","Milwaukee Bucks":"密尔沃基雄鹿","Minnesota Timberwolves":"明尼苏达森林狼",
+    "New Orleans Pelicans":"新奥尔良鹈鹕","New York Knicks":"纽约尼克斯","Oklahoma City Thunder":"俄克拉荷马雷霆",
+    "Orlando Magic":"奥兰多魔术","Philadelphia 76ers":"费城76人","Phoenix Suns":"菲尼克斯太阳",
+    "Portland Trail Blazers":"波特兰开拓者","Sacramento Kings":"萨克拉门托国王","San Antonio Spurs":"圣安东尼奥马刺",
+    "Toronto Raptors":"多伦多猛龙","Utah Jazz":"犹他爵士","Washington Wizards":"华盛顿奇才",
+}
 TASK_STATUS_CN={"pending":"等待开始","running":"监测中","paused":"已暂停","stopped":"已停止","finished":"已完赛","review_required":"待人工确认"}
 PARLAY_STATUS_CN={"pending":"监测中","won":"已中奖","lost":"未中奖","review_required":"待人工核验","stopped":"已停止"}
 # Official JCZQ system-pass modes, mapped to the sizes of the elementary
@@ -124,6 +140,11 @@ def init_db():
             c.execute("ALTER TABLE tasks ADD COLUMN finished_at TEXT")
         if "created_for_parlay" not in columns:
             c.execute("ALTER TABLE tasks ADD COLUMN created_for_parlay INTEGER NOT NULL DEFAULT 0")
+        if "sport" not in columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN sport TEXT NOT NULL DEFAULT 'football'")
+        if "provider_game_id" not in columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN provider_game_id TEXT")
+        c.execute("UPDATE tasks SET provider_game_id=CAST(fixture_id AS TEXT) WHERE sport='football' AND provider_game_id IS NULL")
         c.execute("UPDATE tasks SET finished_at=COALESCE(NULLIF(last_check,''),created_at) WHERE status='finished' AND finished_at IS NULL")
 
 def auth(credentials:HTTPBasicCredentials=Depends(BASIC)):
@@ -157,6 +178,100 @@ def api(endpoint,params):
     result=request_json("https://v3.football.api-sports.io/"+endpoint+"?"+q, {"x-apisports-key":key})
     if result.get("errors"):raise RuntimeError(str(result["errors"]))
     return result.get("response",[])
+
+def balldontlie_key():
+    key=os.getenv("BALLDONTLIE_API_KEY","").strip()
+    return "" if key.casefold() in {"replace_me","your_key","your_api_key"} else key
+
+def balldontlie_api(endpoint,params=None):
+    global BALLDONTLIE_LAST_REQUEST
+    key=balldontlie_key()
+    if not key:raise HTTPException(503,"篮球监测尚未配置 BALLDONTLIE_API_KEY")
+    try:min_interval=max(0.0,float(os.getenv("BALLDONTLIE_MIN_INTERVAL_SECONDS","12.5")))
+    except (TypeError,ValueError):min_interval=12.5
+    with BALLDONTLIE_LOCK:
+        wait=min_interval-(time.monotonic()-BALLDONTLIE_LAST_REQUEST)
+        if wait>0:time.sleep(wait)
+        BALLDONTLIE_LAST_REQUEST=time.monotonic()
+        url="https://api.balldontlie.io/nba/v1/"+str(endpoint).lstrip("/")
+        if params:url+="?"+urllib.parse.urlencode(params,doseq=True)
+        try:
+            result=request_json(url,{"Authorization":key})
+        except urllib.error.HTTPError as error:
+            if error.code==401:raise HTTPException(503,"BallDontLie API Key 无效或当前账号无权访问 NBA 比赛数据") from error
+            if error.code==429:raise HTTPException(503,"BallDontLie 请求达到服务方限额，请稍后重试") from error
+            raise HTTPException(502,f"BallDontLie 暂时无法提供比赛数据（HTTP {error.code}）") from error
+        except urllib.error.URLError as error:
+            raise HTTPException(502,"暂时无法连接 BallDontLie，请稍后重试") from error
+        if not isinstance(result,dict) or result.get("error") or result.get("errors"):
+            raise HTTPException(502,"BallDontLie 返回了无法识别的比赛数据")
+        return result
+
+def _bdl_state(game):
+    state=str(game.get("status_state") or "").strip().lower()
+    if state in {"scheduled","in_progress","final","postponed","canceled","delayed","suspended","abandoned","unknown"}:
+        return state
+    raw=str(game.get("status") or "").strip().lower()
+    if raw=="final":return "final"
+    if raw in {"1st qtr","2nd qtr","halftime","3rd qtr","4th qtr"} or re.search(r"\b(?:q[1-4]|[1-4](?:st|nd|rd|th)?\s*(?:qtr|quarter)|overtime|ot\d*)\b",raw):return "in_progress"
+    if raw in {"in progress","live"}:return "in_progress"
+    if game.get("postponed"):return "postponed"
+    if raw:return "scheduled"
+    return "unknown"
+
+def _bdl_status_cn(state,raw_status=""):
+    if state=="scheduled":return "未开赛"
+    if state=="in_progress":
+        normalized=str(raw_status or "").strip().lower()
+        labels={"1st qtr":"第1节","2nd qtr":"第2节","halftime":"中场休息","3rd qtr":"第3节","4th qtr":"第4节"}
+        if normalized in labels:return labels[normalized]
+        for pattern,label in ((r"\b(?:q1|1st\s*(?:qtr|quarter))\b","第1节"),(r"\b(?:q2|2nd\s*(?:qtr|quarter))\b","第2节"),
+            (r"\b(?:q3|3rd\s*(?:qtr|quarter))\b","第3节"),(r"\b(?:q4|4th\s*(?:qtr|quarter))\b","第4节")):
+            if re.search(pattern,normalized):return label
+        if "half" in normalized:return "中场休息"
+        if re.search(r"\b(?:ot\d*|overtime)\b",normalized):return "加时赛"
+        return "比赛进行中"
+    return {"final":"已完赛","postponed":"比赛延期","canceled":"比赛已取消","delayed":"比赛延迟",
+        "suspended":"比赛暂停","abandoned":"比赛中止","unknown":"状态待确认"}.get(state,"状态待确认")
+
+def _bdl_datetime(value):
+    if not value:return None
+    try:
+        parsed=datetime.fromisoformat(str(value).replace("Z","+00:00"))
+        if parsed.tzinfo is None:parsed=parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except (TypeError,ValueError):return None
+
+def basketball_fixtures(date_value,q=""):
+    try:
+        day=datetime.fromisoformat(date_value+"T00:00:00+08:00")
+    except (TypeError,ValueError):raise HTTPException(422,"比赛日期无效")
+    end=day+timedelta(days=1)
+    api_start=day.astimezone(timezone.utc).date().isoformat()
+    api_end=(end-timedelta(microseconds=1)).astimezone(timezone.utc).date().isoformat()
+    result=balldontlie_api("games",{"start_date":api_start,"end_date":api_end,"per_page":100})
+    games=result.get("data")
+    if not isinstance(games,list):raise HTTPException(502,"BallDontLie 返回的 NBA 赛程格式无效")
+    term=str(q or "").strip().casefold()
+    matches=[]
+    for game in games:
+        kickoff=_bdl_datetime(game.get("datetime"))
+        if kickoff is None:continue
+        local_kickoff=kickoff.astimezone(TZ)
+        if not day.date()<=local_kickoff.date()<end.date():continue
+        home=(game.get("home_team") or {}).get("full_name") or ""
+        away=(game.get("visitor_team") or {}).get("full_name") or ""
+        def team_matches(name):
+            return not term or term in name.casefold() or term in NBA_TEAM_NAMES_ZH.get(name,"").casefold()
+        if not (team_matches(home) or team_matches(away)):continue
+        state=_bdl_state(game)
+        postseason=bool(game.get("postseason"))
+        league="NBA季后赛" if postseason else "NBA杯" if game.get("ist_stage") else "NBA"
+        raw_status=str(game.get("status") or "")
+        matches.append({"id":int(game["id"]),"provider_id":int(game["id"]),"sport":"basketball",
+            "home":home,"home_cn":NBA_TEAM_NAMES_ZH.get(home,""),"away":away,"away_cn":NBA_TEAM_NAMES_ZH.get(away,""),
+            "league_name":league,"kickoff":kickoff.isoformat(),"status":state,"status_cn":_bdl_status_cn(state,raw_status)})
+    return sorted(matches,key=lambda row:row["kickoff"])
 
 def notify(message):
     token=os.getenv("TELEGRAM_BOT_TOKEN")
@@ -230,7 +345,51 @@ def tick(task):
             return
         return _tick(dict(current))
 
+def _tick_basketball(task):
+    if json.loads(task.get("ticket_json") or "[]"):
+        raise RuntimeError("Basketball score monitoring does not settle soccer ticket markets")
+    provider_id=int(task.get("provider_game_id") or (int(task["fixture_id"])-BALLDONTLIE_GAME_ID_BASE))
+    payload=balldontlie_api(f"games/{provider_id}")
+    game=payload.get("data")
+    if not isinstance(game,dict) or int(game.get("id",0))!=provider_id:raise RuntimeError("NBA game unavailable from BallDontLie")
+    home=(game.get("home_team") or {}).get("full_name") or ""
+    away=(game.get("visitor_team") or {}).get("full_name") or ""
+    if home!=task["home"] or away!=task["away"]:raise RuntimeError("NBA team mismatch from BallDontLie")
+    state=_bdl_state(game)
+    raw_status=str(game.get("status") or "")
+    provider_status=state+"|"+_bdl_status_cn(state,raw_status)
+    home_score=game.get("home_team_score")
+    away_score=game.get("visitor_team_score")
+    score=None
+    if state in {"in_progress","final"} and home_score is not None and away_score is not None:
+        score=f"{int(home_score)}:{int(away_score)}"
+    if state=="final" and score is None:raise RuntimeError("Final NBA game has no final score")
+    closed=state=="final"
+    requires_review=state in {"canceled","abandoned"}
+    now=datetime.now(timezone.utc)
+    next_at=(now+timedelta(minutes=task["interval_minutes"])).isoformat()
+    status_text=_bdl_status_cn(state,raw_status)
+    clock=str(game.get("time") or "").strip()
+    clock_text=f" · 剩余 {clock}" if state=="in_progress" and clock else ""
+    competition="NBA季后赛" if bool(game.get("postseason")) else "NBA杯" if game.get("ist_stage") else "NBA"
+    message=(f"{'🏁 NBA 比赛结束' if closed else '🏀 NBA 赛况更新'}\n{home} {score or '—'} {away}\n"
+        f"状态：{status_text}{clock_text}\n赛事：{competition}")
+    if requires_review:message+="\n比赛已取消或中止，请核对官方状态；系统不会自动结算。"
+    elif closed:message+="\n终场比分已记录，比分监测已结束。"
+    else:message+="\n该任务只监测篮球比分，不进行竞彩投注结算。"
+    changed=task.get("last_score")!=score or task.get("provider_status")!=provider_status
+    if changed or closed:notify(message)
+    task_status="review_required" if requires_review else "finished" if closed else "running"
+    kickoff=_bdl_datetime(game.get("datetime"))
+    kickoff_value=kickoff.isoformat() if kickoff else None
+    with conn() as c:
+        c.execute("""UPDATE tasks SET kickoff=COALESCE(?,kickoff),last_score=?,settlement_score=?,provider_status=?,last_check=?,next_check=?,status=?,
+            finished_at=CASE WHEN ?='finished' THEN COALESCE(finished_at,?) ELSE finished_at END,error=NULL
+            WHERE id=? AND enabled=1 AND status IN ('pending','running')""",
+            (kickoff_value,score,score,provider_status,now.isoformat(),next_at,task_status,task_status,now.isoformat(),task["id"]))
+
 def _tick(task):
+    if task.get("sport","football")=="basketball":return _tick_basketball(task)
     fid=task["fixture_id"]
     r=api("fixtures",{"id":fid})
     if len(r)!=1:raise RuntimeError("Fixture unavailable")
@@ -342,6 +501,7 @@ class Ticket(BaseModel):
 
 class TaskIn(BaseModel):
     fixture_id:int=Field(gt=0)
+    sport:Literal["football","basketball"]="football"
     home:str
     away:str
     kickoff:str|None=None
@@ -581,10 +741,12 @@ def sync_parlays_for_fixture(fixture_id):
 
 @app.get("/api/health")
 def health(_:str=Depends(auth)):
-    return {"ok":True,"poller":POLL_ENABLED,"timezone":"Asia/Shanghai","screenshot_score_lists":True,"parlay_monitoring":True}
+    return {"ok":True,"poller":POLL_ENABLED,"timezone":"Asia/Shanghai","screenshot_score_lists":True,
+        "parlay_monitoring":True,"basketball_monitoring":bool(balldontlie_key())}
 
 @app.get("/api/fixtures")
-def fixtures(date:str=Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),q:str="",_:str=Depends(auth)):
+def fixtures(date:str=Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),q:str="",sport:Literal["football","basketball"]="football",_:str=Depends(auth)):
+    if sport=="basketball":return basketball_fixtures(date,q)
     matches=api("fixtures",{"date":date,"timezone":"Asia/Shanghai"})
     term=q.strip().casefold()
     search_terms=[term] if term else []
@@ -602,7 +764,7 @@ def fixtures(date:str=Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),q:str="",_:str=Depen
     def team_matches(name):
         name=(name or "").casefold()
         return not search_terms or any(search_term in name for search_term in search_terms)
-    return [{"id":x["fixture"]["id"],"home":x["teams"]["home"]["name"],"away":x["teams"]["away"]["name"],
+    return [{"id":x["fixture"]["id"],"provider_id":x["fixture"]["id"],"sport":"football","home":x["teams"]["home"]["name"],"away":x["teams"]["away"]["name"],
              "league_name":(x.get("league") or {}).get("name"),
              "kickoff":x["fixture"]["date"],"status":x["fixture"]["status"]["short"],"status_cn":STATUS_CN.get(x["fixture"]["status"]["short"],x["fixture"]["status"]["short"])}
              for x in matches if team_matches(x["teams"]["home"]["name"]) or team_matches(x["teams"]["away"]["name"])]
@@ -647,6 +809,11 @@ def tasks(_:str=Depends(auth)):
             *(map(int,half) if len(half)==2 and all(p.isdigit() for p in half) else [None,None]),verified_scores)
         x["settlement"]["final"]=x["status"]=="finished"
         x["status_cn"]=TASK_STATUS_CN.get(x["status"],x["status"])
+        if x.get("sport")=="basketball":
+            x["home_cn"]=NBA_TEAM_NAMES_ZH.get(x["home"],"")
+            x["away_cn"]=NBA_TEAM_NAMES_ZH.get(x["away"],"")
+            state,_,raw_status=str(x.get("provider_status") or "").partition("|")
+            x["game_status_cn"]=(raw_status or _bdl_status_cn(state)) if state else "等待首次查询"
 
     return rows
 
@@ -785,24 +952,46 @@ def create_task(data:TaskIn,_:str=Depends(auth)):
     tickets=validate_tickets(data.tickets)
     listed_scores=validate_listed_scores(data.listed_scores)
     validate_score_metadata(tickets,listed_scores,data.listed_scores_verified)
+    if data.sport=="basketball" and (tickets or listed_scores is not None or data.listed_scores_verified):
+        raise HTTPException(422,"篮球任务目前只监测比分，暂不支持足球竞彩投注项")
     try:
         start=datetime.fromisoformat(data.start_at)
         if start.tzinfo is None:raise ValueError()
     except ValueError:raise HTTPException(422,"start_at must include timezone offset")
-    # Confirm match identity from the provider; never trust just the browser's team names.
-    rows=api("fixtures",{"id":data.fixture_id,"timezone":"Asia/Shanghai"})
-    if len(rows)!=1:raise HTTPException(422,"Fixture not accessible")
-    fixture=rows[0]
-    home=fixture["teams"]["home"]["name"];away=fixture["teams"]["away"]["name"]
-    league_name=(fixture.get("league") or {}).get("name")
+    if data.sport=="basketball":
+        if data.fixture_id>=BALLDONTLIE_GAME_ID_BASE:raise HTTPException(422,"BallDontLie 比赛 ID 无效")
+        payload=balldontlie_api(f"games/{data.fixture_id}")
+        fixture=payload.get("data")
+        if not isinstance(fixture,dict) or int(fixture.get("id",0))!=data.fixture_id:raise HTTPException(422,"NBA 比赛无法在 BallDontLie 中核实")
+        home=(fixture.get("home_team") or {}).get("full_name") or ""
+        away=(fixture.get("visitor_team") or {}).get("full_name") or ""
+        if home!=data.home or away!=data.away:raise HTTPException(422,"NBA 比赛队伍与 BallDontLie 返回结果不一致")
+        kickoff=_bdl_datetime(fixture.get("datetime"))
+        if kickoff is None:raise HTTPException(422,"BallDontLie 尚未提供该 NBA 比赛的准确开赛时间")
+        kickoff_value=kickoff.isoformat()
+        league_name="NBA季后赛" if bool(fixture.get("postseason")) else "NBA杯" if fixture.get("ist_stage") else "NBA"
+        sport="basketball"
+        provider_game_id=str(data.fixture_id)
+        internal_fixture_id=BALLDONTLIE_GAME_ID_BASE+data.fixture_id
+    else:
+        # Confirm match identity from the provider; never trust just the browser's team names.
+        rows=api("fixtures",{"id":data.fixture_id,"timezone":"Asia/Shanghai"})
+        if len(rows)!=1:raise HTTPException(422,"Fixture not accessible")
+        fixture=rows[0]
+        home=fixture["teams"]["home"]["name"];away=fixture["teams"]["away"]["name"]
+        league_name=(fixture.get("league") or {}).get("name")
+        kickoff_value=fixture["fixture"]["date"]
+        sport="football"
+        provider_game_id=str(data.fixture_id)
+        internal_fixture_id=data.fixture_id
     now=datetime.now(timezone.utc).isoformat()
     next_at=max(start.astimezone(timezone.utc).isoformat(),now)
     with conn() as c:
         try:
-            cur=c.execute("""INSERT INTO tasks(fixture_id,home,away,league_name,kickoff,start_at,interval_minutes,next_check,ticket_json,listed_scores_json,listed_scores_verified,created_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",(data.fixture_id,home,away,league_name,fixture["fixture"]["date"],start.isoformat(),data.interval_minutes,next_at,json.dumps(tickets,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(data.listed_scores_verified),now))
+            cur=c.execute("""INSERT INTO tasks(fixture_id,provider_game_id,sport,home,away,league_name,kickoff,start_at,interval_minutes,next_check,ticket_json,listed_scores_json,listed_scores_verified,created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(internal_fixture_id,provider_game_id,sport,home,away,league_name,kickoff_value,start.isoformat(),data.interval_minutes,next_at,json.dumps(tickets,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(data.listed_scores_verified),now))
         except sqlite3.IntegrityError:raise HTTPException(409,"Fixture already monitored")
-    return {"id":cur.lastrowid,"home":home,"away":away}
+    return {"id":cur.lastrowid,"home":home,"away":away,"sport":sport}
 
 @app.put("/api/tasks/{task_id}/tickets")
 def update_tickets(task_id:int,data:list[Ticket]|TicketUpdateIn,_:str=Depends(auth)):
@@ -810,8 +999,10 @@ def update_tickets(task_id:int,data:list[Ticket]|TicketUpdateIn,_:str=Depends(au
     values=validate_tickets(tickets)
     with TASK_LOCK:
         with conn() as c:
-            existing=c.execute("SELECT listed_scores_json,listed_scores_verified FROM tasks WHERE id=?",(task_id,)).fetchone()
+            existing=c.execute("SELECT sport,listed_scores_json,listed_scores_verified FROM tasks WHERE id=?",(task_id,)).fetchone()
             if not existing:raise HTTPException(404,"Task not found")
+            if existing["sport"]=="basketball" and (values or (isinstance(data,TicketUpdateIn) and (data.listed_scores is not None or data.listed_scores_verified is True))):
+                raise HTTPException(422,"篮球任务目前只监测比分，暂不支持足球竞彩投注项")
             if isinstance(data,list):
                 listed_scores=json.loads(existing["listed_scores_json"]) if existing["listed_scores_json"] else None
                 verified=bool(existing["listed_scores_verified"])
