@@ -267,6 +267,57 @@ test('detects dark selected cells, filters a full-width button, and inverts whit
   assert.deepEqual([...gray], [255, 255, 255, 255, 0, 0, 0, 255]);
 });
 
+test('detects red selected cells separately and ignores the adjacent green market label', () => {
+  const width = 320, height = 180;
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = 248;
+    pixels[offset + 3] = 255;
+  }
+  const fill = (x0, y0, x1, y1, color) => {
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      const offset = (y * width + x) * 4;
+      pixels[offset] = color[0]; pixels[offset + 1] = color[1]; pixels[offset + 2] = color[2];
+    }
+  };
+  fill(10, 15, 50, 165, [100, 183, 127]); // vertical green “总进球” heading
+  fill(50, 70, 120, 125, [208, 1, 27]);
+  fill(120, 70, 124, 125, [90, 90, 90]); // dark cell divider must not join the picks
+  fill(124, 70, 194, 125, [208, 1, 27]);
+  fill(235, 20, 305, 75, [208, 1, 27]);
+
+  const regions = parser.detectSelectedRegions(pixels, width, height);
+  assert.equal(regions.length, 3);
+  assert.deepEqual(JSON.stringify(regions), JSON.stringify([
+    { x0: 235, y0: 20, x1: 305, y1: 75 },
+    { x0: 50, y0: 70, x1: 120, y1: 125 },
+    { x0: 124, y0: 70, x1: 194, y1: 125 },
+  ]));
+});
+
+test('uses a vertically written 总进球 heading to classify selected number and SP crops', () => {
+  const pageWords = [word('总', 24, 175, 94, 18), word('进', 24, 250, 94, 18), word('球', 24, 325, 94, 18)];
+  const regions = [
+    { x0: 800, y0: 100, x1: 900, y1: 200 },
+    { x0: 500, y0: 320, x1: 600, y1: 420 },
+  ];
+  const cropResults = regions.map((region, index) => ({
+    region,
+    cropWidth: 100,
+    cropHeight: 100,
+    words: [word(index ? '5' : '3', 30, 8, 96, 14), word(index ? '6.00' : '3.65', 30, 55, 96, 34)],
+  }));
+
+  assert.equal(parser.marketAt(150, pageWords, 589, 850), 'total_goals');
+  assert.equal(parser.marketAt(370, pageWords, 589, 550), 'total_goals');
+  const rows = parser.parseSelectedRegions(cropResults, pageWords, 1536, 589);
+  assert.deepEqual(JSON.stringify(rows.map(({ market, selection, odds, highlighted, unrecognized }) =>
+    ({ market, selection, odds, highlighted, unrecognized }))), JSON.stringify([
+    { market: 'total_goals', selection: '3', odds: 3.65, highlighted: true, unrecognized: false },
+    { market: 'total_goals', selection: '5', odds: 6, highlighted: true, unrecognized: false },
+  ]));
+});
+
 test('replaces whole-page text inside selected cells with upscaled cell OCR', () => {
   const regions = [
     { x0: 112, y0: 286, x1: 214, y1: 331 },

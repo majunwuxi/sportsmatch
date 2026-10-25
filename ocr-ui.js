@@ -94,7 +94,7 @@
       const row = document.createElement("tr");
       const cell = document.createElement("td");
       cell.colSpan = 8;
-      cell.textContent = "未检测到深色底选项。请核对截图，或展开未选候选项后手动勾选。";
+      cell.textContent = "未检测到高亮底选项。请核对截图，或展开未选候选项后手动勾选。";
       row.append(cell);
       body.append(row);
     }
@@ -176,7 +176,7 @@
 
       const confidenceCell = document.createElement("td");
       confidenceCell.textContent = pick.unrecognized
-        ? "已按深色选区建行 · 请手动校对"
+        ? "已按选区建行 · 请手动校对"
         : (pick.highlighted ? "选区内容识别 · " : "待勾选 · ") + "OCR " + pick.confidence + "%";
       if (pick.needsReview) confidenceCell.classList.add("bad");
       tr.append(checkCell, marketCell, selectionCell, handicapCell, oddsCell, stakeCell, resultCell, confidenceCell);
@@ -220,7 +220,7 @@
     const highlighted = parsedPicks.filter((pick) => pick.highlighted).length;
     $("ocrSelectedCount").textContent = "已选 " + picks.length + " 项";
     $("ocrSelectedTotal").textContent = money(total);
-    $("ocrCount").textContent = "候选 " + parsedPicks.length + " 项 · 深色选区 " + selectionRegionCount + " 块 · 按选区建单 " + highlighted + " 项 · 当前勾选 " + picks.length + " 项 · 投入 " + money(total);
+    $("ocrCount").textContent = "候选 " + parsedPicks.length + " 项 · 检测选区 " + selectionRegionCount + " 块 · 按选区建单 " + highlighted + " 项 · 当前勾选 " + picks.length + " 项 · 投入 " + money(total);
     const marketSummaries = [...groups.entries()].map(([market, group]) => {
       const valid = group.picks.filter((pick) => validateRow(pick).ok && Number(pick.stake) >= 2);
       if (!valid.length) return (MARKETS[market] || "未知玩法") + "投注额 " + money(group.total) + "，待补充有效SP和金额";
@@ -826,10 +826,10 @@
       const engineStatus = "识别引擎：" + worker.engineName + (worker.fallbackNotice ? "（" + worker.fallbackNotice + "）" : "") + "。";
       setOcrStatus(engineStatus + (parsedPicks.length
         ? highlighted
-          ? "识别出 " + parsedPicks.length + " 个候选项，检测到 " + selectionRegionCount + " 块深色选区，并按选区建立 " + highlighted + " 条投注项（选项识别 " + recognizedLabels + "/" + selectionRegionCount + "，SP识别 " + recognizedOdds + "/" + selectionRegionCount + "）。" + gridStatus + "；精确比分清单当前有 " + listedScoreCount + "/28 项，请对照截图核对。"
+          ? "识别出 " + parsedPicks.length + " 个候选项，检测到 " + selectionRegionCount + " 块高亮选区，并按选区建立 " + highlighted + " 条投注项（选项识别 " + recognizedLabels + "/" + selectionRegionCount + "，SP识别 " + recognizedOdds + "/" + selectionRegionCount + "）。" + gridStatus + "；精确比分清单当前有 " + listedScoreCount + "/28 项，请对照截图核对。"
           : selectionRegionCount
-            ? "检测到 " + selectionRegionCount + " 块深色选区，但未能建立选区记录。" + gridStatus + "；精确比分清单当前有 " + listedScoreCount + "/28 项，请核对清单。"
-            : "识别到 " + parsedPicks.length + " 个候选项，但没有检测到深色底选项，因此没有自动勾选。" + gridStatus + "；精确比分清单当前有 " + listedScoreCount + "/28 项，请核对清单。"
+            ? "检测到 " + selectionRegionCount + " 块高亮选区，但未能建立选区记录。" + gridStatus + "；精确比分清单当前有 " + listedScoreCount + "/28 项，请核对清单。"
+            : "识别到 " + parsedPicks.length + " 个候选项，但没有检测到高亮底选项，因此没有自动勾选。" + gridStatus + "；精确比分清单当前有 " + listedScoreCount + "/28 项，请核对清单。"
         : "没有识别到可用投注项。请换一张包含玩法标题、选项和SP的清晰截图，或手动填写模拟器。"), !parsedPicks.length);
     } catch (error) {
       $("simulatorManual").hidden = false;

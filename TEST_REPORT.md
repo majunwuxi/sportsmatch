@@ -324,3 +324,12 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - The task-creation error `Cross-origin write denied` comes from the FastAPI origin guard when a browser write's `Origin` does not exactly match `PUBLIC_ORIGIN`. Added the required self-hosted origin to `.env.example`, documented the exact production value and trailing-slash constraint, and added a regression test for an allowed UI origin while retaining rejection of other origins.
 - Verification: packaged Site Worker tests — 38/38 passed; Python byte-compilation, JavaScript syntax check, and `git diff --check` passed. Backend pytest could not run because pytest and FastAPI are not installed in this workspace.
 - The server's `/opt/sportsmatch/.env` and `sportsmatch-web.service` were not accessible from this workspace and were not changed or restarted. To restore task creation, set `PUBLIC_ORIGIN=https://sportsmatch.sendmymail.top` in the server `.env` and restart only `sportsmatch-web.service`. The legacy `napoli-monitor.service` was not touched.
+
+## 2026-10-25 — Recognize selected total-goals cells in screenshot OCR
+
+- Color selection detection now separates saturated red betting cells from the adjacent green vertical market label. Vertical Chinese heading fragments such as `总` / `进` / `球` are grouped to provide `总进球` context for the selected number and its SP.
+- Regression coverage includes the uploaded total-goals screenshot layout: selected 3, 4, and 5 cells, with green header excluded, plus vertical-heading classification and number/SP parsing.
+- The uploaded screenshot's selected-cell detector returned three separate red regions and no green/neutral false selection. This validates selection isolation; PaddleOCR inference against the live browser image was not run in this workspace.
+- Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 62/62 passed; Site Worker tests — 38/38 passed; Site build and ESM validation, Python byte-compilation, JavaScript syntax checks, and `git diff --check` passed.
+- Owner-only ChatGPT Site version 47 deployed successfully at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site). Access remains limited to the owner, with no groups or external visitors.
+- The separate amstd server was not accessed, and neither `sportsmatch-web.service` nor `napoli-monitor.service` was changed or restarted. No screenshot, credentials, API keys, Telegram tokens, or betting records were committed.

@@ -75,11 +75,51 @@
     return null;
   }
 
-  function makeHeadings(lines) {
-    return lines.flatMap((line) => {
-      const market = marketForHeading(line.text);
-      return market ? [{ market, cy: line.cy, bottom: line.bottom }] : [];
+  function verticalMarketHeadings(words, height) {
+    const candidates = (words || []).map((word) => ({ word, box: getBox(word), text: normalize(word.text) }))
+      .filter((item) => item.text.length <= 8 && /[比分总进球半全场让胜平负]/.test(item.text));
+    const clusters = [];
+    for (const item of candidates) {
+      let cluster = clusters.find((entry) => Math.abs(entry.cx - item.box.cx)
+        <= Math.max(10, Math.min(entry.maxWidth, item.box.width) * 0.7)
+        && Math.abs(entry.lastCy - item.box.cy) <= Math.min(Number(height) * 0.22,
+          Math.max(80, Math.max(entry.maxHeight, item.box.height) * 3)));
+      if (!cluster) {
+        cluster = { items: [], cx: item.box.cx, maxWidth: item.box.width, maxHeight: item.box.height, lastCy: item.box.cy };
+        clusters.push(cluster);
+      }
+      cluster.items.push(item);
+      cluster.cx = cluster.items.reduce((sum, entry) => sum + entry.box.cx, 0) / cluster.items.length;
+      cluster.maxWidth = Math.max(cluster.maxWidth, item.box.width);
+      cluster.maxHeight = Math.max(cluster.maxHeight, item.box.height);
+      cluster.lastCy = item.box.cy;
+    }
+    return clusters.flatMap((cluster) => {
+      if (cluster.items.length < 2) return [];
+      const items = [...cluster.items].sort((a, b) => a.box.cy - b.box.cy);
+      const market = marketForHeading(items.map((item) => item.text).join(""));
+      if (!market) return [];
+      const top = Math.min(...items.map((item) => item.box.top));
+      const bottom = Math.max(...items.map((item) => item.box.bottom));
+      const left = Math.min(...items.map((item) => item.box.left));
+      const right = Math.max(...items.map((item) => item.box.right));
+      if (bottom - top <= Math.max(24, (right - left) * 1.25)) return [];
+      return [{ market, cy: top - Math.max(2, Number(height) * 0.05), bottom, left, right, vertical: true }];
     });
+  }
+
+  function makeHeadings(lines, words = [], height = 1) {
+    const horizontal = lines.flatMap((line) => {
+      const market = marketForHeading(line.text);
+      if (!market) return [];
+      const vertical = line.bottom - line.top > Math.max(24, (line.right - line.left) * 1.25);
+      return [vertical
+        ? { market, cy: line.top - Math.max(2, Number(height) * 0.05), bottom: line.bottom, left: line.left, right: line.right, vertical: true }
+        : { market, cy: line.cy, bottom: line.bottom, left: line.left, right: line.right, vertical: false }];
+    });
+    const vertical = verticalMarketHeadings(words, height).filter((candidate) => !horizontal.some((heading) =>
+      heading.vertical && heading.market === candidate.market && Math.abs(heading.bottom - candidate.bottom) < Math.max(20, Number(height) * 0.05)));
+    return [...horizontal, ...vertical];
   }
 
   function sectionAt(y, headings, height) {
@@ -196,7 +236,7 @@
   function parse(words, width, height, isHighlighted = () => false, forcedMarket = null) {
     const validWords = (words || []).filter((word) => normalize(word.text) && Number(word.confidence ?? 100) >= 20 && getBox(word).right > getBox(word).left);
     const lines = groupLines(validWords, height);
-    const headings = makeHeadings(lines);
+    const headings = makeHeadings(lines, validWords, height);
     const tokens = mergeFragments(lines, width);
     const candidates = tokens.flatMap((word) => {
       const market = forcedMarket || sectionAt(getBox(word).cy, headings, height);
@@ -418,51 +458,49 @@
     return { ok: invalid.length === 0, scores, invalid };
   }
 
-  function isDarkFillPixel(red, green, blue) {
+  function isChromaticSelectionPixel(red, green, blue) {
     const high = Math.max(red, green, blue);
     const low = Math.min(red, green, blue);
     const luminance = (red * 3 + green * 5 + blue * 2) / 10;
-    const chromaticFill = high - low >= 24 && luminance >= 28 && luminance <= 178;
-    const neutralFill = high <= 112 && high - low <= 24;
-    return chromaticFill || neutralFill;
+    return high - low >= 24 && luminance >= 28 && luminance <= 128;
   }
 
-  function detectSelectedRegions(imageData, width, height) {
-    const pixels = imageData?.data || imageData;
-    const w = Math.floor(Number(width));
-    const h = Math.floor(Number(height));
-    if (!pixels || !Number.isInteger(w) || !Number.isInteger(h) || w < 1 || h < 1 || pixels.length < w * h * 4) return [];
+  function isNeutralSelectionPixel(red, green, blue) {
+    const high = Math.max(red, green, blue);
+    const low = Math.min(red, green, blue);
+    return high <= 112 && high - low <= 24;
+  }
 
-    const size = w * h;
+  function selectedComponents(pixels, width, height, pixelMatches) {
+    const size = width * height;
     const mask = new Uint8Array(size);
     for (let pixel = 0, offset = 0; pixel < size; pixel++, offset += 4) {
-      mask[pixel] = isDarkFillPixel(pixels[offset], pixels[offset + 1], pixels[offset + 2]) ? 1 : 0;
+      mask[pixel] = pixelMatches(pixels[offset], pixels[offset + 1], pixels[offset + 2]) ? 1 : 0;
     }
 
     const visited = new Uint8Array(size);
     const queue = new Int32Array(size);
     const minArea = Math.max(24, Math.floor(size * 0.00035));
-    const minWidth = Math.max(10, Math.ceil(w * 0.055));
-    const minHeight = Math.max(5, Math.ceil(h * 0.014));
+    const minWidth = Math.max(10, Math.ceil(width * 0.055));
+    const minHeight = Math.max(5, Math.ceil(height * 0.014));
     const regions = [];
-
     for (let start = 0; start < size; start++) {
       if (!mask[start] || visited[start]) continue;
-      let head = 0, tail = 0, minX = w, minY = h, maxX = -1, maxY = -1;
+      let head = 0, tail = 0, minX = width, minY = height, maxX = -1, maxY = -1;
       visited[start] = 1;
       queue[tail++] = start;
       while (head < tail) {
         const index = queue[head++];
-        const x = index % w;
-        const y = Math.floor(index / w);
+        const x = index % width;
+        const y = Math.floor(index / width);
         minX = Math.min(minX, x); minY = Math.min(minY, y);
         maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
         for (let dy = -1; dy <= 1; dy++) {
           for (let dx = -1; dx <= 1; dx++) {
             if (!dx && !dy) continue;
             const nx = x + dx, ny = y + dy;
-            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-            const next = ny * w + nx;
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+            const next = ny * width + nx;
             if (mask[next] && !visited[next]) {
               visited[next] = 1;
               queue[tail++] = next;
@@ -473,13 +511,25 @@
 
       const boxWidth = maxX - minX + 1;
       const boxHeight = maxY - minY + 1;
-      const boxArea = boxWidth * boxHeight;
-      const fillRatio = tail / boxArea;
+      const fillRatio = tail / (boxWidth * boxHeight);
       if (tail < minArea || boxWidth < minWidth || boxHeight < minHeight || fillRatio < 0.36) continue;
       // A full-width bar near the bottom is usually a page button, not a selected betting cell.
-      if (minX <= w * 0.05 && maxX >= w * 0.95 && minY >= h * 0.78) continue;
+      if (minX <= width * 0.05 && maxX >= width * 0.95 && minY >= height * 0.78) continue;
       regions.push({ x0: minX, y0: minY, x1: maxX + 1, y1: maxY + 1 });
     }
+    return regions;
+  }
+
+  function detectSelectedRegions(imageData, width, height) {
+    const pixels = imageData?.data || imageData;
+    const w = Math.floor(Number(width));
+    const h = Math.floor(Number(height));
+    if (!pixels || !Number.isInteger(w) || !Number.isInteger(h) || w < 1 || h < 1 || pixels.length < w * h * 4) return [];
+
+    const regions = [
+      ...selectedComponents(pixels, w, h, isChromaticSelectionPixel),
+      ...selectedComponents(pixels, w, h, isNeutralSelectionPixel),
+    ];
     return regions.sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
   }
 
@@ -523,13 +573,22 @@
     return false;
   }
 
-  function marketAt(y, words, height) {
+  function marketAt(y, words, height, x = null) {
     const validWords = (words || []).filter((word) => normalize(word.text)
       && Number(word.confidence ?? 100) >= 20 && getBox(word).right > getBox(word).left);
-    const headings = makeHeadings(groupLines(validWords, height)).sort((a, b) => a.cy - b.cy);
+    const headings = makeHeadings(groupLines(validWords, height), validWords, height).sort((a, b) => a.cy - b.cy);
     const selectedY = Number(y);
+    const vertical = headings.filter((heading) => heading.vertical && selectedY >= heading.cy
+      && selectedY <= heading.bottom + height * 0.32);
+    if (vertical.length) {
+      const selectedX = x === null || x === undefined ? Number.NaN : Number(x);
+      vertical.sort((a, b) => Number.isFinite(selectedX)
+        ? Math.abs((a.left + a.right) / 2 - selectedX) - Math.abs((b.left + b.right) / 2 - selectedX)
+        : Math.abs((a.cy + a.bottom) / 2 - selectedY) - Math.abs((b.cy + b.bottom) / 2 - selectedY));
+      return vertical[0].market;
+    }
     const priorIndex = headings.reduce((index, heading, current) => heading.cy < selectedY ? current : index, -1);
-    if (priorIndex < 0) return null;
+    if (priorIndex < 0) return headings.length === 1 ? headings[0].market : null;
     const prior = headings[priorIndex];
     const next = headings[priorIndex + 1];
     // A later market heading bounds the current section, so keep its context
@@ -562,7 +621,7 @@
 
   function scoreSelectedCrop(item, pageWords, width, height, marketHint = null) {
     const region = item?.region || { x0: 0, y0: 0, x1: 0, y1: 0 };
-    const contextualMarket = marketHint || marketAt((region.y0 + region.y1) / 2, pageWords, height);
+    const contextualMarket = marketHint || marketAt((region.y0 + region.y1) / 2, pageWords, height, (region.x0 + region.x1) / 2);
     const cropWidth = Number(item?.cropWidth) || Math.max(1, region.x1 - region.x0);
     const cropHeight = Number(item?.cropHeight) || Math.max(1, region.y1 - region.y0);
     const inferredMarket = contextualMarket || inferSelectedMarket(item?.words || [], cropWidth, cropHeight);
@@ -610,7 +669,7 @@
         };
       });
 
-      const contextualMarket = marketAt(region.y0 + regionHeight / 2, validPageWords, height);
+      const contextualMarket = marketAt(region.y0 + regionHeight / 2, validPageWords, height, region.x0 + regionWidth / 2);
       const inferredMarket = contextualMarket || inferSelectedMarket(mappedTokens, width, height);
       const cropRows = inferredMarket
         ? parse(mappedTokens, width, height, () => true, inferredMarket)
@@ -674,6 +733,7 @@
       if (scoreOptions.has(text) || repairSelectedScoreLabel(text)) return "correct_score";
       if (halfFullOptions.has(text)) return "half_full";
     }
+    if (tokens.some((word) => totalGoalOptions.has(normalize(word.text)))) return "total_goals";
     if (tokens.some((word) => ["主胜", "客胜", "胜", "平", "负"].includes(normalize(word.text)))) return "match_result";
     return null;
   }
