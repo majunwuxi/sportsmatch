@@ -242,6 +242,70 @@ def test_parlay_loses_if_any_leg_in_a_2_by_1_loses(client):
     assert result['payout']==0
     assert result['net']==-10
 
+def test_lost_2_by_1_combo_stops_its_unneeded_parlay_only_watcher(client,monkeypatch):
+    def provider(endpoint,params):
+        fixture_id=int(params['id'])
+        return [{'fixture':{'id':fixture_id,'date':'2026-10-25T12:00:00Z'},
+            'teams':{'home':{'name':f'H{fixture_id}'},'away':{'name':f'A{fixture_id}'}},
+            'league':{'name':'Test League'}}]
+    monkeypatch.setattr(m,'api',provider)
+    created=client.post('/api/parlays',auth=('test','test-password'),json=_parlay_body())
+    assert created.status_code==200,created.text
+    parlay_id=created.json()['id']
+    with m.conn() as c:
+        c.execute("""UPDATE tasks SET status='finished',enabled=0,provider_status='FT',
+            last_score='0:1',settlement_score='0:1' WHERE fixture_id=12""")
+    result=m.sync_parlay(parlay_id,send_notice=False)
+    assert result['status']=='lost'
+    assert result['combinations'][0]['state']=='lost'
+    assert result['legs'][1]['monitor_needed'] is False
+    assert result['legs'][1]['status_cn']=='本票无需继续等待'
+    with m.conn() as c:
+        second=c.execute("SELECT status,enabled FROM tasks WHERE fixture_id=13").fetchone()
+        assert (second['status'],second['enabled'])==('stopped',0)
+
+def test_winning_first_leg_keeps_2_by_1_waiting_for_second_result(client,monkeypatch):
+    def provider(endpoint,params):
+        fixture_id=int(params['id'])
+        return [{'fixture':{'id':fixture_id,'date':'2026-10-25T12:00:00Z'},
+            'teams':{'home':{'name':f'H{fixture_id}'},'away':{'name':f'A{fixture_id}'}},
+            'league':{'name':'Test League'}}]
+    monkeypatch.setattr(m,'api',provider)
+    created=client.post('/api/parlays',auth=('test','test-password'),json=_parlay_body())
+    assert created.status_code==200,created.text
+    with m.conn() as c:
+        c.execute("""UPDATE tasks SET status='finished',enabled=0,provider_status='FT',
+            last_score='1:0',settlement_score='1:0' WHERE fixture_id=12""")
+    result=m.sync_parlay(created.json()['id'],send_notice=False)
+    assert result['status']=='pending'
+    assert result['combinations'][0]['state']=='pending'
+    assert [leg['state'] for leg in result['legs']]==['won','pending']
+    assert result['legs'][1]['monitor_needed'] is True
+    with m.conn() as c:
+        second=c.execute("SELECT status,enabled FROM tasks WHERE fixture_id=13").fetchone()
+        assert (second['status'],second['enabled'])==('pending',1)
+
+def test_losing_one_leg_keeps_other_2_by_1_combinations_under_monitor(client,monkeypatch):
+    def provider(endpoint,params):
+        fixture_id=int(params['id'])
+        return [{'fixture':{'id':fixture_id,'date':'2026-10-25T12:00:00Z'},
+            'teams':{'home':{'name':f'H{fixture_id}'},'away':{'name':f'A{fixture_id}'}},
+            'league':{'name':'Test League'}}]
+    monkeypatch.setattr(m,'api',provider)
+    body=_parlay_body();body['pass_type']='3串3';body['multiples']=1;body['declared_total']=6;body['declared_payout']=None
+    body['legs'].append({'fixture_id':14,'market':'match_result','selection':'胜','odds':1.80})
+    created=client.post('/api/parlays',auth=('test','test-password'),json=body)
+    assert created.status_code==200,created.text
+    with m.conn() as c:
+        c.execute("""UPDATE tasks SET status='finished',enabled=0,provider_status='FT',
+            last_score='0:1',settlement_score='0:1' WHERE fixture_id=12""")
+    result=m.sync_parlay(created.json()['id'],send_notice=False)
+    assert result['status']=='pending'
+    assert [combo['state'] for combo in result['combinations']]==['lost','lost','pending']
+    with m.conn() as c:
+        rows=c.execute("SELECT fixture_id,status,enabled FROM tasks WHERE fixture_id IN (13,14) ORDER BY fixture_id").fetchall()
+        assert [(row['fixture_id'],row['status'],row['enabled']) for row in rows]==[(13,'pending',1),(14,'pending',1)]
+
 def test_system_pass_settles_each_generated_combo_separately():
     parent={'id':7,'pass_type':'3串4','multiples':1,'unit_stake':2,'total_stake':8,'declared_payout':None}
     legs=[{'id':index+1,'leg_index':index,'fixture_id':20+index,'home':f'H{index}','away':f'A{index}',

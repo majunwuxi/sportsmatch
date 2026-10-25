@@ -504,6 +504,16 @@ def evaluate_parlay(parlay,legs,tasks_by_fixture):
             "status_cn":{"won":"中奖","lost":"未中奖","pending":"待结算","review_required":"待核验"}.get(state,state),
             "stake":float(stake),"payout":float(payout) if payout is not None else None,"max_payout":float(theoretical) if theoretical is not None else None})
 
+    needed_fixtures={
+        int(leg["fixture_id"])
+        for combo in combos if combo["state"] in {"pending","review_required"}
+        for leg in combo["legs"] if leg["state"]=="pending"
+    }
+    for result in leg_results:
+        result["monitor_needed"]=int(result["fixture_id"]) in needed_fixtures
+        if result["state"]=="pending" and not result["monitor_needed"]:
+            result["status_cn"]="本票无需继续等待"
+
     if has_review: status="review_required"
     elif has_pending: status="pending"
     elif any(item["state"]=="won" for item in combos): status="won"
@@ -527,6 +537,21 @@ def load_parlay(parlay_id):
             "SELECT * FROM tasks WHERE fixture_id IN ("+",".join("?" for _ in fixture_ids)+")",fixture_ids)} if fixture_ids else {}
     return dict(parent),legs,tasks
 
+def pending_parlay_fixture_ids():
+    with conn() as c:
+        ids=[int(row[0]) for row in c.execute(
+            "SELECT id FROM parlay_tickets WHERE status IN ('pending','review_required')")]
+    required=set()
+    for parlay_id in ids:
+        loaded=load_parlay(parlay_id)
+        if not loaded:continue
+        parent,legs,tasks=loaded
+        evaluated=evaluate_parlay(parent,legs,tasks)
+        for combo in evaluated["combinations"]:
+            if combo["state"] in {"pending","review_required"}:
+                required.update(int(leg["fixture_id"]) for leg in combo["legs"] if leg["state"]=="pending")
+    return required
+
 def sync_parlay(parlay_id,send_notice=True):
     loaded=load_parlay(parlay_id)
     if not loaded:return None
@@ -539,6 +564,7 @@ def sync_parlay(parlay_id,send_notice=True):
         if not stopped:c.execute("UPDATE parlay_tickets SET status=?,updated_at=? WHERE id=?",(result["status"],datetime.now(timezone.utc).isoformat(),parlay_id))
         current=c.execute("SELECT last_notified_state FROM parlay_tickets WHERE id=?",(parlay_id,)).fetchone()
         last=current["last_notified_state"] if current else None
+    stop_unused_parlay_watchers([int(leg["fixture_id"]) for leg in legs])
     if send_notice and result["status"] in {"won","lost","review_required"} and result["status"]!=last:
         parts=[f"🎟️ 过关票状态：{result['status_cn']}",f"方式：{result['pass_type']} · {result['multiples']}倍 · {result['combination_count']}注",f"总投入：¥{result['total_stake']:.2f}"]
         for leg in result["legs"]:
@@ -745,14 +771,14 @@ def has_open_parlay_for_fixture(fixture_id):
             WHERE l.fixture_id=? AND p.status IN ('pending','review_required') LIMIT 1""",(fixture_id,)).fetchone() is not None
 
 def stop_unused_parlay_watchers(fixture_ids):
+    required=pending_parlay_fixture_ids()
     with conn() as c:
         for fixture_id in set(fixture_ids):
+            if int(fixture_id) in required:continue
             task=c.execute("SELECT id,status,ticket_json,created_for_parlay FROM tasks WHERE fixture_id=?",(fixture_id,)).fetchone()
             if not task or not task["created_for_parlay"] or json.loads(task["ticket_json"] or "[]") or task["status"] not in {"pending","running","paused"}:
                 continue
-            active=c.execute("""SELECT 1 FROM parlay_legs l JOIN parlay_tickets p ON p.id=l.parlay_id
-                WHERE l.fixture_id=? AND p.status IN ('pending','review_required') LIMIT 1""",(fixture_id,)).fetchone()
-            if not active:c.execute("UPDATE tasks SET status='stopped',enabled=0 WHERE id=?",(task["id"],))
+            c.execute("UPDATE tasks SET status='stopped',enabled=0 WHERE id=?",(task["id"],))
 
 @app.post("/api/tasks")
 def create_task(data:TaskIn,_:str=Depends(auth)):

@@ -348,3 +348,10 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Final verification: backend pytest — 59 passed; `node --test site/worker/test.mjs tests/test_ocr_parser.mjs` — 65 passed; packaged Site Worker — 41 passed; Site build and ESM artifact validation, Python byte-compilation, JS syntax checks, and `git diff --check` passed.
 - Owner-only ChatGPT Site version 49 deployed successfully at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site), source commit `e3147f67f827dd965899c6e2d9da37db6115587c`. Access remains owner-only.
 - amstd remains unchanged. Pull the resulting GitHub commit and restart only `sportsmatch-web.service` to enable the backend endpoints. `napoli-monitor.service` was not accessed or modified; no secrets, tokens, credentials, screenshots, or private betting records were committed.
+
+## 2026-10-25 — Stop monitoring combinations that can no longer win
+
+- A combination is settled as soon as any required leg is confirmed lost. If the first leg wins, a two-leg 2串1 ticket remains pending for the second result. If the first leg loses, the other fixture no longer needs polling; the UI labels it “本票无需继续等待”. A parlay-only watcher is stopped automatically, while a task reused by single-match monitoring or another unresolved combination stays active.
+- System tickets keep monitoring only fixtures still used by a pending or reviewable combination. A regression test verifies that one loss in a three-leg 3串3 ticket eliminates two combinations but preserves the remaining combination's watchers.
+- Verification: `uv run --with 'fastapi>=0.115,<1' --with httpx --with pytest python -m pytest tests/test_app.py -q` — 62 passed; Python byte-compilation, JavaScript syntax checks, and `git diff --check` passed. The Site frontend did not change in this update.
+- The amstd server was not accessed. Apply this backend change by pulling GitHub `main` and restarting only `sportsmatch-web.service`; `napoli-monitor.service` remains untouched.
