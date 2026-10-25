@@ -629,6 +629,9 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert '.task.task-finished-old{background:#f59e0b' in html
     assert 'finishedTaskColorClass(t.status,t.kickoff)' in html
     assert 'function finishedTaskColorClass(status,value,now=Date.now())' in html
+    assert 't.status==="finished"&&taskPayout>0&&(t.settlement?.tickets||[]).some(ticket=>ticket.won===true)' in html
+    assert 'payoutBubble.textContent="返奖总额 "+money(taskPayout)' in html
+    assert '.task-payout-bubble{display:inline-flex;align-items:center;border-radius:999px' in html
     ui=(m.Path(__file__).parents[1]/'ocr-ui.js').read_text(encoding='utf-8')
     assert 'Number($("ocrBudget").value)' in ui and 'hasRecognizedSelections' in ui
     assert '$("ocrSelectedTotal").textContent = money(total)' in ui
