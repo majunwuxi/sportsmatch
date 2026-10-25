@@ -425,7 +425,9 @@ def test_team_map_asset_is_authenticated_and_contains_team_badges(client):
     assert 'javascript' in response.headers['content-type']
     assert 'MatchMonitorTeamDirectory' in response.text
     assert 'Club Brugge KV' in response.text and '布鲁日' in response.text
+    assert 'Fagiano Okayama' in response.text and '冈山绿雉' in response.text
     assert 'https://media.api-sports.io/football/teams/569.png' in response.text
+    assert 'https://thumb.wikimedia.org/wikipedia/en/thumb/0/07/Fagiano_Okayama_logo.svg/960px-Fagiano_Okayama_logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=imageinfo&utm_content=thumbnail' in response.text
 
 def test_team_logo_proxy_uses_the_logo_registered_for_each_team(client,monkeypatch):
     calls=[]
@@ -438,8 +440,12 @@ def test_team_logo_proxy_uses_the_logo_registered_for_each_team(client,monkeypat
     assert response.headers['cache-control']=='private, max-age=86400'
     assert response.headers['x-content-type-options']=='nosniff'
     assert calls==['https://media.api-sports.io/football/teams/569.png']
+    fagiano_logo='https://thumb.wikimedia.org/wikipedia/en/thumb/0/07/Fagiano_Okayama_logo.svg/960px-Fagiano_Okayama_logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=imageinfo&utm_content=thumbnail'
+    response=client.get('/team-logo/310.png',auth=('test','test-password'))
+    assert response.status_code==200 and response.content==image
+    assert calls==['https://media.api-sports.io/football/teams/569.png',fagiano_logo]
     assert client.get('/team-logo/999999.png',auth=('test','test-password')).status_code==404
-    assert calls==['https://media.api-sports.io/football/teams/569.png']
+    assert calls==['https://media.api-sports.io/football/teams/569.png',fagiano_logo]
 
 
 def test_custom_registered_logo_from_another_https_host_is_served(client,monkeypatch):

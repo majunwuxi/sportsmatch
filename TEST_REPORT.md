@@ -312,3 +312,9 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Regression coverage verifies the normal day rollover and the year boundary.
 - Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 60/60 passed; packaged Site Worker — 38/38 passed; Site build and ESM artifact validation passed. JavaScript syntax checks and `git diff --check` passed.
 - Deployed owner-only ChatGPT Site version 45 at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site). The amstd backend was not restarted.
+
+## 2026-10-25 — Add Fagiano Okayama to the team directory
+
+- Added Fagiano Okayama / 冈山绿雉 as a Japan J1 team under API-Football team ID `310`, with the supplied HTTPS Wikimedia crest URL. Chinese fixture search resolves to `Fagiano Okayama`, and the registered crest uses the authenticated same-origin `/team-logo/310.png` proxy.
+- Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 60/60 passed; packaged Site Worker — 38/38 passed; Python byte-compilation, JavaScript syntax check, and `git diff --check` passed. Targeted backend pytest could not run because pytest is not installed in this workspace.
+- Deployed owner-only ChatGPT Site version 46 at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site). The amstd backend was not restarted.
