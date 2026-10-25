@@ -194,6 +194,140 @@ def test_health_advertises_screenshot_score_list_support(client):
     response=client.get('/api/health',auth=('test','test-password'))
     assert response.status_code==200
     assert response.json()['screenshot_score_lists'] is True
+    assert response.json()['parlay_monitoring'] is True
+
+def _seed_task(fixture_id,home,away,status='running',score=None):
+    now=datetime.now(timezone.utc).isoformat()
+    with m.conn() as c:
+        cur=c.execute("""INSERT INTO tasks(fixture_id,home,away,kickoff,start_at,interval_minutes,next_check,
+            ticket_json,created_at,last_score,settlement_score,half_score,provider_status,status)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (fixture_id,home,away,'2026-10-25T12:00:00Z',now,10,now,
+             '[{"market":"total_goals","selection":"3","stake":2,"odds":2.0}]',now,
+             score,score,'0:0','FT' if status=='finished' else 'NS',status))
+        return cur.lastrowid
+
+def _parlay_body():
+    return {'pass_type':'2串1','multiples':5,'unit_stake':2,'declared_total':10,'declared_payout':18.65,'legs':[
+        {'fixture_id':12,'market':'match_result','selection':'胜','odds':1.220},
+        {'fixture_id':13,'market':'match_result','selection':'胜','odds':1.530}]}
+
+def test_parlay_settlement_reuses_existing_total_goals_watchers(client,monkeypatch):
+    _seed_task(12,'Inter','Fiorentina')
+    _seed_task(13,'Barcelona','Real Madrid')
+    calls=[]
+    monkeypatch.setattr(m,'api',lambda *args,**kwargs:calls.append(args))
+    response=client.post('/api/parlays',auth=('test','test-password'),json=_parlay_body())
+    assert response.status_code==200,response.text
+    assert calls==[]
+    assert response.json()['total_stake']==10
+    with m.conn() as c:
+        assert c.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]==2
+        assert c.execute('SELECT COUNT(*) FROM parlay_legs').fetchone()[0]==2
+        c.execute("UPDATE tasks SET status='finished',enabled=0,last_score='1:0',settlement_score='1:0',provider_status='FT'")
+    settled=client.get('/api/parlays',auth=('test','test-password')).json()[0]
+    assert settled['status']=='won'
+    assert settled['payout']==18.65
+    assert settled['net']==8.65
+    assert settled['payout_matches_ticket'] is True
+    assert all(leg['state']=='won' for leg in settled['legs'])
+
+def test_parlay_loses_if_any_leg_in_a_2_by_1_loses(client):
+    _seed_task(12,'Inter','Fiorentina','finished','1:0')
+    _seed_task(13,'Barcelona','Real Madrid','finished','0:1')
+    response=client.post('/api/parlays',auth=('test','test-password'),json=_parlay_body())
+    assert response.status_code==200,response.text
+    result=response.json()
+    assert result['status']=='lost'
+    assert result['payout']==0
+    assert result['net']==-10
+
+def test_system_pass_settles_each_generated_combo_separately():
+    parent={'id':7,'pass_type':'3串4','multiples':1,'unit_stake':2,'total_stake':8,'declared_payout':None}
+    legs=[{'id':index+1,'leg_index':index,'fixture_id':20+index,'home':f'H{index}','away':f'A{index}',
+        'market':'match_result','selection':'胜','odds':'1.50','void_confirmed':0} for index in range(3)]
+    tasks={20:{'status':'finished','settlement_score':'1:0','last_score':'1:0','half_score':'0:0','provider_status':'FT'},
+        21:{'status':'finished','settlement_score':'2:0','last_score':'2:0','half_score':'1:0','provider_status':'FT'},
+        22:{'status':'finished','settlement_score':'0:1','last_score':'0:1','half_score':'0:1','provider_status':'FT'}}
+    result=m.evaluate_parlay(parent,legs,tasks)
+    assert result['combination_count']==4
+    assert [combo['state'] for combo in result['combinations']].count('won')==1
+    assert result['payout']==4.5
+    assert result['net']==-3.5
+
+def test_full_pass_modes_include_every_single_and_multi_leg_combination():
+    for leg_count in range(2,9):
+        mode=(1<<leg_count)-1
+        canonical,sizes=m.normalize_pass_type(f'{leg_count}串{mode}',leg_count)
+        assert canonical==f'{leg_count}串{mode}'
+        assert sizes==tuple(range(1,leg_count+1))
+        assert len(m.pass_combinations(leg_count,canonical)[1])==mode
+
+def test_active_parlay_prevents_stopping_or_deleting_a_shared_match(client):
+    _seed_task(12,'Inter','Fiorentina')
+    _seed_task(13,'Barcelona','Real Madrid')
+    created=client.post('/api/parlays',auth=('test','test-password'),json=_parlay_body())
+    assert created.status_code==200
+    auth=('test','test-password')
+    assert client.post('/api/tasks/1/pause',auth=auth).status_code==409
+    assert client.delete('/api/tasks/1',auth=auth).status_code==409
+    parlay_id=created.json()['id']
+    assert client.post(f'/api/parlays/{parlay_id}/stop',auth=auth).status_code==200
+    assert client.post('/api/tasks/1/pause',auth=auth).status_code==200
+
+def test_parlay_created_score_only_watchers_stop_with_their_last_ticket(client,monkeypatch):
+    calls=[]
+    def provider(endpoint,params):
+        fixture_id=int(params['id']);calls.append(fixture_id)
+        return [{'fixture':{'id':fixture_id,'date':'2026-10-25T12:00:00Z'},
+            'teams':{'home':{'name':f'H{fixture_id}'},'away':{'name':f'A{fixture_id}'}},
+            'league':{'name':'Test League'}}]
+    monkeypatch.setattr(m,'api',provider)
+    body=_parlay_body()
+    created=client.post('/api/parlays',auth=('test','test-password'),json=body)
+    assert created.status_code==200,created.text
+    assert calls==[12,13]
+    with m.conn() as c:
+        assert c.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]==2
+        assert c.execute('SELECT COUNT(*) FROM tasks WHERE created_for_parlay=1').fetchone()[0]==2
+    stopped=client.post(f"/api/parlays/{created.json()['id']}/stop",auth=('test','test-password'))
+    assert stopped.status_code==200
+    with m.conn() as c:
+        rows=c.execute('SELECT status,enabled FROM tasks ORDER BY fixture_id').fetchall()
+        assert [(row['status'],row['enabled']) for row in rows]==[('stopped',0),('stopped',0)]
+
+def test_deleting_parlay_removes_only_its_record_not_reused_match_watchers(client):
+    _seed_task(12,'Inter','Fiorentina')
+    _seed_task(13,'Barcelona','Real Madrid')
+    created=client.post('/api/parlays',auth=('test','test-password'),json=_parlay_body())
+    assert created.status_code==200
+    removed=client.delete(f"/api/parlays/{created.json()['id']}",auth=('test','test-password'))
+    assert removed.status_code==200
+    with m.conn() as c:
+        assert c.execute('SELECT COUNT(*) FROM parlay_legs').fetchone()[0]==0
+        assert c.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]==2
+        assert c.execute("SELECT COUNT(*) FROM tasks WHERE status='running'").fetchone()[0]==2
+
+def test_parlay_validates_leg_count_duplicate_fixture_and_declared_total(client):
+    body=_parlay_body();body['legs'][1]['fixture_id']=12
+    assert client.post('/api/parlays',auth=('test','test-password'),json=body).status_code==422
+    body=_parlay_body();body['declared_total']=8
+    assert client.post('/api/parlays',auth=('test','test-password'),json=body).status_code==422
+
+def test_parlay_void_confirmation_reduces_combo_to_remaining_leg(client):
+    _seed_task(12,'Inter','Fiorentina','review_required')
+    _seed_task(13,'Barcelona','Real Madrid','finished','1:0')
+    with m.conn() as c:
+        c.execute("UPDATE tasks SET provider_status='CANC',status='review_required',enabled=0 WHERE fixture_id=12")
+    created=client.post('/api/parlays',auth=('test','test-password'),json=_parlay_body())
+    assert created.status_code==200
+    assert created.json()['status']=='review_required'
+    parlay_id=created.json()['id'];leg_id=created.json()['legs'][0]['id']
+    confirmed=client.post(f'/api/parlays/{parlay_id}/legs/{leg_id}/confirm-void',auth=('test','test-password'),json={'confirmed':True})
+    assert confirmed.status_code==200
+    assert confirmed.json()['status']=='won'
+    assert confirmed.json()['payout']==15.3
+    assert confirmed.json()['net']==5.3
 
 def test_future_resume(client,monkeypatch):
     start=(datetime.now(timezone.utc)+timedelta(days=2)).isoformat()
@@ -391,11 +525,12 @@ def test_existing_database_migration_preserves_tasks_and_tickets(monkeypatch,tmp
 def test_index_contains_simulator_and_no_old_score_calculator():
     html=(m.Path(__file__).parents[1]/'index.html').read_text(encoding='utf-8')
     assert '竞彩足球比分投注模拟器' in html
+    assert 'class="search-parlay-layout"' in html
     assert 'class="dashboard-layout"' in html and 'class="dashboard-left"' in html
     assert 'id="monitorTasks"' in html and 'class="card simulator-card"' in html
     assert 'class="section-divider"' in html
-    assert '.dashboard-layout{display:grid' in html and '@media(max-width:900px)' in html
-    assert html.index('<h2>查找比赛</h2>') < html.index('<h2>创建监测任务</h2>') < html.index('<h2>监测任务</h2>') < html.index('class="section-divider"') < html.index('竞彩足球比分投注模拟器')
+    assert '.search-parlay-layout{display:grid' in html and '.dashboard-layout{display:grid' in html and '@media(max-width:900px)' in html
+    assert html.index('<h2>查找比赛</h2>') < html.index('<h2>过关票监测</h2>') < html.index('<h2>创建单场监测任务</h2>') < html.index('<h2>单场监测任务</h2>') < html.index('class="section-divider"') < html.index('竞彩足球比分投注模拟器')
     assert '下载JSON文件' not in html and '复制投注 JSON' in html and '自动均衡分配' in html
     assert 'betScreenshot' in html and 'ocrConfirm' in html and '/ocr-parser.js' in html and '/ocr-ui.js' in html
     assert 'id="simulatorManual" hidden' in html and 'id="manualMode"' in html

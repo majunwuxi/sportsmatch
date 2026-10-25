@@ -333,3 +333,18 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Verification: `node --test tests/test_ocr_parser.mjs site/worker/test.mjs` — 62/62 passed; Site Worker tests — 38/38 passed; Site build and ESM validation, Python byte-compilation, JavaScript syntax checks, and `git diff --check` passed.
 - Owner-only ChatGPT Site version 47 deployed successfully at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site). Access remains limited to the owner, with no groups or external visitors.
 - The separate amstd server was not accessed, and neither `sportsmatch-web.service` nor `napoli-monitor.service` was changed or restarted. No screenshot, credentials, API keys, Telegram tokens, or betting records were committed.
+
+## 2026-10-25 — Standalone parlay monitoring
+
+- Backend scenarios cover the sample 2串1 ticket (5×, ¥10 stake, ¥18.65 return, ¥8.65 profit), a losing leg, 3串4 constituent-combination settlement, cross-market reuse of existing total-goals watchers, shared-task pause/delete protection, invalid-fixture confirmation, and automatic cleanup of score-only watchers created solely for a parlay.
+- Browser parser test extracts both matches, “主胜” selections, SP 1.220/1.530, 2串1, five multiples, ¥10 total, and ¥18.65 declared top prize. The Site Worker proxy tests owner authentication, scoped parlay paths, same-origin writes, and forwarding without exposing backend credentials.
+- Verification: `uv run --with 'fastapi>=0.115,<1' --with httpx --with pytest python -m pytest tests/test_app.py -q` — 58 passed; `node --test site/worker/test.mjs tests/test_ocr_parser.mjs` — 64 passed; isolated Site Worker tests — 40 passed; Site build and artifact validation, Python byte-compilation, JavaScript syntax checks, and `git diff --check` passed.
+- Owner-only Site version 48 deployed successfully at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site), Site source commit `903bf46b301904b97f7bac3d7aa48d0a65ab12a9`. Access remains limited to the owner, with zero groups and zero external visitors.
+- The live Site frontend is updated; the amstd Python backend still needs the GitHub update and restart of `sportsmatch-web.service` before `/api/parlays` becomes available. The server was not accessed, and neither `sportsmatch-web.service` nor `napoli-monitor.service` was changed. No secrets, screenshots, or private betting records were committed.
+
+## 2026-10-25 — Full pass-mode variants and final Site deployment
+
+- Added full-subset pass modes 2串3, 3串7, 4串15, 5串31, 6串63, and 8串255 (7串127 was already present), with a backend test confirming each mode generates every 1-to-n subset and the expected `2^n - 1` combination count.
+- Final verification: backend pytest — 59 passed; `node --test site/worker/test.mjs tests/test_ocr_parser.mjs` — 65 passed; packaged Site Worker — 41 passed; Site build and ESM artifact validation, Python byte-compilation, JS syntax checks, and `git diff --check` passed.
+- Owner-only ChatGPT Site version 49 deployed successfully at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site), source commit `e3147f67f827dd965899c6e2d9da37db6115587c`. Access remains owner-only.
+- amstd remains unchanged. Pull the resulting GitHub commit and restart only `sportsmatch-web.service` to enable the backend endpoints. `napoli-monitor.service` was not accessed or modified; no secrets, tokens, credentials, screenshots, or private betting records were committed.

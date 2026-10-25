@@ -1,4 +1,5 @@
-import os, json, time, sqlite3, threading, urllib.request, urllib.parse, http.client, ipaddress, socket, ssl
+import os, json, time, sqlite3, threading, urllib.request, urllib.parse, http.client, ipaddress, socket, ssl, re, math
+from itertools import combinations
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
@@ -36,10 +37,24 @@ HALF_FULL={a+b for a in RESULTS for b in RESULTS}
 TOTAL_GOALS={"0","1","2","3","4","5","6","7+"}
 STATUS_CN={"TBD":"待定","NS":"未开赛","1H":"上半场","HT":"中场休息","2H":"下半场","ET":"加时赛","BT":"加时赛休息","P":"点球大战","SUSP":"暂停","INT":"中断","FT":"完场","AET":"加时赛结束","PEN":"点球结束","PST":"延期","CANC":"已取消","ABD":"比赛中止","AWD":"判定赛果","WO":"弃权"}
 TASK_STATUS_CN={"pending":"等待开始","running":"监测中","paused":"已暂停","stopped":"已停止","finished":"已完赛","review_required":"待人工确认"}
+PARLAY_STATUS_CN={"pending":"监测中","won":"已中奖","lost":"未中奖","review_required":"待人工核验","stopped":"已停止"}
+# Official JCZQ system-pass modes, mapped to the sizes of the elementary
+# combinations contained in the ticket. Each mode is validated by its exact
+# generated combination count before it is accepted.
+PASS_COMBO_SIZES={
+    2:{1:(2,),3:(1,2)},
+    3:{1:(3,),3:(2,),4:(2,3),7:(1,2,3)},
+    4:{1:(4,),4:(3,),5:(3,4),6:(2,),11:(2,3,4),15:(1,2,3,4)},
+    5:{1:(5,),5:(4,),6:(4,5),10:(3,),16:(3,4,5),20:(2,3),26:(2,3,4,5),31:(1,2,3,4,5)},
+    6:{1:(6,),6:(5,),7:(5,6),15:(4,),20:(3,),22:(4,5,6),35:(3,4),42:(3,4,5,6),50:(2,3,4),57:(2,3,4,5,6),63:(1,2,3,4,5,6)},
+    7:{1:(7,),7:(6,),8:(6,7),21:(5,),35:(4,),56:(3,),120:(2,3,4,5,6,7),127:(1,2,3,4,5,6,7)},
+    8:{1:(8,),8:(7,),9:(7,8),28:(6,),56:(5,),70:(4,),247:(2,3,4,5,6,7,8),255:(1,2,3,4,5,6,7,8)},
+}
 
 def conn():
     c=sqlite3.connect(DB, timeout=15)
     c.row_factory=sqlite3.Row
+    c.execute("PRAGMA foreign_keys=ON")
     return c
 
 def init_db():
@@ -56,10 +71,39 @@ def init_db():
           status TEXT NOT NULL DEFAULT 'pending',
           last_score TEXT, last_check TEXT, finished_at TEXT, next_check TEXT NOT NULL,
           ticket_json TEXT NOT NULL DEFAULT '[]',
-          error TEXT, created_at TEXT NOT NULL
+          error TEXT, created_at TEXT NOT NULL,
+          created_for_parlay INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS usage (
           utc_day TEXT PRIMARY KEY, requests INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS parlay_tickets (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          pass_type TEXT NOT NULL,
+          multiples INTEGER NOT NULL,
+          unit_stake REAL NOT NULL DEFAULT 2,
+          total_stake REAL NOT NULL,
+          declared_payout REAL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          last_notified_state TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS parlay_legs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          parlay_id INTEGER NOT NULL REFERENCES parlay_tickets(id) ON DELETE CASCADE,
+          leg_index INTEGER NOT NULL,
+          fixture_id INTEGER NOT NULL,
+          home TEXT NOT NULL,
+          away TEXT NOT NULL,
+          league_name TEXT,
+          kickoff TEXT,
+          market TEXT NOT NULL,
+          selection TEXT NOT NULL,
+          handicap INTEGER,
+          odds TEXT NOT NULL,
+          void_confirmed INTEGER NOT NULL DEFAULT 0,
+          UNIQUE(parlay_id,leg_index)
         );
         """)
         columns={r[1] for r in c.execute("PRAGMA table_info(tasks)")}
@@ -78,6 +122,8 @@ def init_db():
             c.execute("ALTER TABLE tasks ADD COLUMN provider_status TEXT")
         if "finished_at" not in columns:
             c.execute("ALTER TABLE tasks ADD COLUMN finished_at TEXT")
+        if "created_for_parlay" not in columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN created_for_parlay INTEGER NOT NULL DEFAULT 0")
         c.execute("UPDATE tasks SET finished_at=COALESCE(NULLIF(last_check,''),created_at) WHERE status='finished' AND finished_at IS NULL")
 
 def auth(credentials:HTTPBasicCredentials=Depends(BASIC)):
@@ -214,10 +260,12 @@ def _tick(task):
     listed_scores=json.loads(task["listed_scores_json"]) if task.get("listed_scores_json") and task.get("listed_scores_verified") else None
     result=outcome(settle_h,settle_a,ticket,half_h,half_a,listed_scores)
     if status in VOID: result={"selection":None,"payout":0,"net":0,"total":result["total"],"review_required":True}
-    calc=(f"按常规90分钟比分 {regulation_score} 试算：返奖 ¥{result.get('payout',0):.2f}，净利润 ¥{result.get('net',0):.2f}" if result.get("has_score") else "比分尚未产生，暂不结算")
+    calc=("本场仅监测比分，未设置单场投注" if not ticket else
+        f"按常规90分钟比分 {regulation_score} 试算：返奖 ¥{result.get('payout',0):.2f}，净利润 ¥{result.get('net',0):.2f}" if result.get("has_score") else "比分尚未产生，暂不结算")
     message=f"{'🏁 比赛结束' if closed else '⚽ 赛况更新'}\n{home} {score or '—'} {away}\n状态：{STATUS_CN.get(status,status)}\n{calc}"
     winners=[r for r in result.get("tickets",[]) if r["won"] is True]
-    if winners: message+="\n命中投注："+"；".join(f"{r['market_label']} {r['selection']} ¥{r['stake']:g} → 返奖 ¥{r['payout']:.2f}" for r in winners)
+    if not ticket: message+="\n该比赛比分会供关联的过关票结算使用"
+    elif winners: message+="\n命中投注："+"；".join(f"{r['market_label']} {r['selection']} ¥{r['stake']:g} → 返奖 ¥{r['payout']:.2f}" for r in winners)
     elif result.get("pending_tickets"): message+="\n半全场投注等待半场比分数据"
     else: message+="\n当前选择未命中"
     if status in VOID: message="比赛中断/取消或异常终止："+home+" vs "+away+"，状态 "+STATUS_CN.get(status,status)+"。请根据官方公告人工确认退款或结算，平台不自动兑奖。"
@@ -230,6 +278,7 @@ def _tick(task):
         league_name=(f.get("league") or {}).get("name")
         c.execute("UPDATE tasks SET league_name=COALESCE(league_name,?),last_score=?,settlement_score=?,half_score=?,provider_status=?,last_check=?,next_check=?,status=?,finished_at=CASE WHEN ?='finished' THEN COALESCE(finished_at,?) ELSE finished_at END,error=NULL WHERE id=? AND enabled=1 AND status IN ('pending','running')",
              (league_name,score,regulation_score,f"{half_h}:{half_a}" if half_h is not None and half_a is not None else None,status,now.isoformat(),next_at,task_status,task_status,now.isoformat(),task["id"]))
+    sync_parlays_for_fixture(fid)
 
 def poll_loop():
     while not STOP.wait(5):
@@ -278,7 +327,8 @@ async def guard(request:Request, call_next):
     if request.method not in {"GET","HEAD","OPTIONS"} and origin and origin!=expected:
         return JSONResponse({"detail":"Cross-origin write denied"},status_code=403)
     response=await call_next(request)
-    response.headers["Cache-Control"]="no-store"
+    if "Cache-Control" not in response.headers:
+        response.headers["Cache-Control"]="no-store"
     response.headers["X-Content-Type-Options"]="nosniff"
     return response
 
@@ -310,6 +360,26 @@ class ScheduleUpdateIn(BaseModel):
     start_at:str
     interval_minutes:int=Field(ge=1,le=120)
 
+class ParlayLegIn(BaseModel):
+    fixture_id:int=Field(gt=0)
+    market:str
+    selection:str
+    odds:float=Field(ge=1,allow_inf_nan=False)
+    handicap:int|None=None
+    start_at:str|None=None
+    interval_minutes:int=Field(default=10,ge=1,le=120)
+
+class ParlayIn(BaseModel):
+    pass_type:str
+    multiples:int=Field(gt=0,le=10000)
+    unit_stake:float=Field(default=2,gt=0,allow_inf_nan=False)
+    declared_total:float|None=Field(default=None,gt=0,allow_inf_nan=False)
+    declared_payout:float|None=Field(default=None,gt=0,allow_inf_nan=False)
+    legs:list[ParlayLegIn]
+
+class ConfirmVoidIn(BaseModel):
+    confirmed:bool
+
 def validate_tickets(items):
     if len(items)>1000: raise HTTPException(422,"Too many tickets")
     for t in items:
@@ -318,7 +388,7 @@ def validate_tickets(items):
             "total_goals":t.selection in TOTAL_GOALS,"half_full":t.selection in HALF_FULL}[t.market]
         if not valid: raise HTTPException(422,f"Invalid selection for {MARKETS[t.market]}: {t.selection}")
         if Decimal(str(t.stake))%Decimal("2"): raise HTTPException(422,"Stake must be a positive multiple of ¥2")
-    return [t.model_dump() for t in items]
+    return [t.model_dump(exclude_none=True) for t in items]
 
 def validate_listed_scores(items):
     if items is None: return None
@@ -340,9 +410,152 @@ def validate_score_metadata(tickets,listed_scores,verified):
     if has_other and listed_scores == []:
         raise HTTPException(422,"The screenshot SP score list is empty; add the recognized exact scores first")
 
+def normalize_pass_type(value,leg_count):
+    raw=str(value or "").strip().lower().replace("×","串").replace("x","串").replace("*","串").replace(" ","")
+    match=re.fullmatch(r"(\d+)串(\d+)",raw)
+    if not match: raise HTTPException(422,"过关方式格式应为2串1、3串4等")
+    count,mode=map(int,match.groups())
+    if count!=leg_count: raise HTTPException(422,"过关方式的场次数必须与比赛腿数量一致")
+    sizes=PASS_COMBO_SIZES.get(count,{}).get(mode)
+    if not sizes: raise HTTPException(422,"该场次数不支持此过关方式")
+    combination_count=sum(math.comb(count,size) for size in sizes)
+    if combination_count!=mode: raise HTTPException(500,"过关方式组合表配置不一致")
+    return f"{count}串{mode}",tuple(sizes)
+
+def pass_combinations(leg_count,pass_type):
+    canonical,sizes=normalize_pass_type(pass_type,leg_count)
+    return canonical,[indices for size in sizes for indices in combinations(range(leg_count),size)]
+
+def _money(value):
+    return Decimal(str(value)).quantize(Decimal("0.01"),rounding=ROUND_HALF_UP)
+
+def _score_pair(value):
+    parts=str(value or "").split(":")
+    return tuple(map(int,parts)) if len(parts)==2 and all(part.isdigit() for part in parts) else (None,None)
+
+def evaluate_parlay(parlay,legs,tasks_by_fixture):
+    pass_type,combo_indices=pass_combinations(len(legs),parlay["pass_type"])
+    multiple=int(parlay["multiples"])
+    unit=Decimal(str(parlay["unit_stake"]))
+    leg_results=[]
+    for leg in legs:
+        task=tasks_by_fixture.get(int(leg["fixture_id"]))
+        current_score=((task.get("settlement_score") if task.get("status")=="finished" else task.get("last_score")) if task else None)
+        settle_value=(task.get("settlement_score") or (task.get("last_score") if task and task.get("status")=="finished" else None)) if task else None
+        if leg.get("void_confirmed"):
+            state="void"
+        elif not task:
+            state="pending"
+        elif task.get("provider_status") in VOID or task.get("status")=="review_required":
+            state="review_required"
+        elif task.get("status")=="finished":
+            home,away=_score_pair(settle_value)
+            if home is None:
+                state="review_required"
+            elif leg["market"]=="correct_score" and OTHER_SCORE_ALIASES.get(leg["selection"],leg["selection"]) in {"胜其他","平其他","负其他"} and not task.get("listed_scores_verified"):
+                state="review_required"
+            else:
+                listed=json.loads(task["listed_scores_json"]) if task.get("listed_scores_json") and task.get("listed_scores_verified") else None
+                result=ticket_matches(leg,home,away,*_score_pair(task.get("half_score")),listed)
+                state="review_required" if result is None else "won" if result else "lost"
+        else:
+            state="pending"
+        live_home,live_away=_score_pair(current_score)
+        live_result=None
+        if task and live_home is not None and state in {"pending","won","lost"}:
+            listed=json.loads(task["listed_scores_json"]) if task.get("listed_scores_json") and task.get("listed_scores_verified") else None
+            live_result=ticket_matches(leg,live_home,live_away,*_score_pair(task.get("half_score")),listed)
+        status_text={"pending":"等待赛果","won":"命中","lost":"未命中","void":"已确认无效","review_required":"待人工核验"}.get(state,state)
+        if state=="pending" and task and task.get("status") in {"paused","stopped"}:
+            status_text="监测已暂停"
+        leg_results.append({"id":int(leg["id"]),"leg_index":int(leg["leg_index"]),"fixture_id":int(leg["fixture_id"]),"home":leg["home"],"away":leg["away"],
+            "league_name":leg.get("league_name"),"kickoff":leg.get("kickoff"),"market":leg["market"],"market_label":MARKETS.get(leg["market"],"玩法"),
+            "selection":leg["selection"],"handicap":leg.get("handicap"),"odds":float(leg["odds"]),"score":settle_value or current_score,
+            "match_status":task.get("provider_status") if task else None,"task_status":task.get("status") if task else None,
+            "state":state,"status_cn":status_text,"current_result":live_result,"void_confirmed":bool(leg.get("void_confirmed"))})
+
+    combos=[]
+    confirmed_payout=Decimal(0)
+    max_possible=Decimal(0)
+    max_payout=Decimal(0)
+    has_pending=False
+    has_review=False
+    for combo_no,indices in enumerate(combo_indices,1):
+        combo_legs=[legs[index] for index in indices]
+        active=[(index,legs[index],leg_results[index]) for index in indices if not legs[index].get("void_confirmed")]
+        stake=unit*multiple
+        if not active:
+            state="review_required";payout=None;has_review=True
+        elif any(result["state"]=="lost" for _,_,result in active):
+            state="lost";payout=Decimal(0)
+        elif any(result["state"]=="review_required" for _,_,result in active):
+            state="review_required";payout=None;has_review=True
+        elif any(result["state"]=="pending" for _,_,result in active):
+            state="pending";payout=None;has_pending=True
+        else:
+            state="won"
+            single=_money(unit*math.prod(Decimal(str(item["odds"])) for _,item,_ in active))
+            payout=single*multiple
+            confirmed_payout+=payout
+        theoretical=_money(unit*math.prod(Decimal(str(item["odds"])) for _,item,_ in active))*multiple if active else None
+        if theoretical is not None:max_payout+=theoretical
+        if state=="pending" and theoretical is not None: max_possible+=theoretical
+        combos.append({"number":combo_no,"legs":[leg_results[index] for index in indices],"state":state,
+            "status_cn":{"won":"中奖","lost":"未中奖","pending":"待结算","review_required":"待核验"}.get(state,state),
+            "stake":float(stake),"payout":float(payout) if payout is not None else None,"max_payout":float(theoretical) if theoretical is not None else None})
+
+    if has_review: status="review_required"
+    elif has_pending: status="pending"
+    elif any(item["state"]=="won" for item in combos): status="won"
+    else: status="lost"
+    total=Decimal(str(parlay["total_stake"]))
+    void_adjusted=any(bool(leg.get("void_confirmed")) for leg in legs)
+    return {"id":int(parlay["id"]),"pass_type":pass_type,"multiples":multiple,"unit_stake":float(unit),
+        "combination_count":len(combo_indices),"total_stake":float(total),"declared_payout":parlay.get("declared_payout"),
+        "max_payout":float(max_payout),"payout_matches_ticket":None if void_adjusted or parlay.get("declared_payout") is None else _money(max_payout)==_money(parlay["declared_payout"]),"payout":float(_money(confirmed_payout)),
+        "max_possible_payout":float(_money(confirmed_payout+max_possible)) if not has_review else None,
+        "net":float(_money(confirmed_payout-total)) if status in {"won","lost"} else None,
+        "status":status,"status_cn":PARLAY_STATUS_CN[status],"final":status in {"won","lost"},"legs":leg_results,"combinations":combos}
+
+def load_parlay(parlay_id):
+    with conn() as c:
+        parent=c.execute("SELECT * FROM parlay_tickets WHERE id=?",(parlay_id,)).fetchone()
+        if not parent: return None
+        legs=[dict(row) for row in c.execute("SELECT * FROM parlay_legs WHERE parlay_id=? ORDER BY leg_index",(parlay_id,))]
+        fixture_ids=[int(row["fixture_id"]) for row in legs]
+        tasks={int(row["fixture_id"]):dict(row) for row in c.execute(
+            "SELECT * FROM tasks WHERE fixture_id IN ("+",".join("?" for _ in fixture_ids)+")",fixture_ids)} if fixture_ids else {}
+    return dict(parent),legs,tasks
+
+def sync_parlay(parlay_id,send_notice=True):
+    loaded=load_parlay(parlay_id)
+    if not loaded:return None
+    parent,legs,tasks=loaded
+    result=evaluate_parlay(parent,legs,tasks)
+    stopped=parent.get("status")=="stopped"
+    if stopped:
+        result["status"]="stopped";result["status_cn"]=PARLAY_STATUS_CN["stopped"];result["net"]=None;result["final"]=False
+    with conn() as c:
+        if not stopped:c.execute("UPDATE parlay_tickets SET status=?,updated_at=? WHERE id=?",(result["status"],datetime.now(timezone.utc).isoformat(),parlay_id))
+        current=c.execute("SELECT last_notified_state FROM parlay_tickets WHERE id=?",(parlay_id,)).fetchone()
+        last=current["last_notified_state"] if current else None
+    if send_notice and result["status"] in {"won","lost","review_required"} and result["status"]!=last:
+        parts=[f"🎟️ 过关票状态：{result['status_cn']}",f"方式：{result['pass_type']} · {result['multiples']}倍 · {result['combination_count']}注",f"总投入：¥{result['total_stake']:.2f}"]
+        for leg in result["legs"]:
+            parts.append(f"{leg['home']} {leg['score'] or '—'} {leg['away']} · {leg['market_label']} {leg['selection']} · {leg['status_cn']}")
+        parts.append(f"返奖：¥{result['payout']:.2f} · 净利：{('¥%+.2f'%result['net']) if result['net'] is not None else '待核验'}")
+        notify("\n".join(parts))
+        with conn() as c:c.execute("UPDATE parlay_tickets SET last_notified_state=? WHERE id=?",(result["status"],parlay_id))
+    return result
+
+def sync_parlays_for_fixture(fixture_id):
+    with conn() as c:
+        ids=[row[0] for row in c.execute("SELECT DISTINCT p.id FROM parlay_tickets p JOIN parlay_legs l ON l.parlay_id=p.id WHERE l.fixture_id=? AND p.status IN ('pending','review_required')",(fixture_id,))]
+    for parlay_id in ids:sync_parlay(parlay_id)
+
 @app.get("/api/health")
 def health(_:str=Depends(auth)):
-    return {"ok":True,"poller":POLL_ENABLED,"timezone":"Asia/Shanghai","screenshot_score_lists":True}
+    return {"ok":True,"poller":POLL_ENABLED,"timezone":"Asia/Shanghai","screenshot_score_lists":True,"parlay_monitoring":True}
 
 @app.get("/api/fixtures")
 def fixtures(date:str=Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),q:str="",_:str=Depends(auth)):
@@ -411,6 +624,136 @@ def tasks(_:str=Depends(auth)):
 
     return rows
 
+@app.get("/api/parlays")
+def get_parlays(_:str=Depends(auth)):
+    with conn() as c: ids=[row[0] for row in c.execute("SELECT id FROM parlay_tickets ORDER BY created_at DESC")]
+    result=[]
+    for parlay_id in ids:
+        item=sync_parlay(parlay_id,send_notice=False)
+        if item:result.append(item)
+    return result
+
+@app.post("/api/parlays")
+def create_parlay(data:ParlayIn,_:str=Depends(auth)):
+    if not 2<=len(data.legs)<=8:raise HTTPException(422,"过关票须包含2到8场比赛")
+    if len({leg.fixture_id for leg in data.legs})!=len(data.legs):raise HTTPException(422,"同一场比赛不能重复作为多条比赛腿")
+    if Decimal(str(data.unit_stake))!=Decimal("2"):raise HTTPException(422,"竞彩过关每注金额必须为2元")
+    try:canonical,combos=pass_combinations(len(data.legs),data.pass_type)
+    except HTTPException:raise
+    except Exception:raise HTTPException(422,"无效的过关方式")
+    count=len(combos)
+    total=Decimal("2")*int(data.multiples)*count
+    if data.declared_total is not None and _money(data.declared_total)!=_money(total):
+        raise HTTPException(422,f"票面总金额与过关组合数不符：按此过关方式应为¥{total:.2f}")
+    for leg in data.legs:
+        candidate=Ticket(selection=leg.selection,market=leg.market,stake=2,odds=leg.odds,handicap=leg.handicap)
+        validate_tickets([candidate])
+    # Reuse existing task rows by fixture ID. Only missing matches need a
+    # provider lookup and a score-only watcher, so each fixture is polled once.
+    fixtures={}
+    with conn() as c:
+        existing={int(row["fixture_id"]):dict(row) for row in c.execute(
+            "SELECT * FROM tasks WHERE fixture_id IN ("+",".join("?" for _ in data.legs)+")",
+            [leg.fixture_id for leg in data.legs])}
+    for leg in data.legs:
+        if leg.fixture_id in existing:continue
+        rows=api("fixtures",{"id":leg.fixture_id,"timezone":"Asia/Shanghai"})
+        if len(rows)!=1 or int(rows[0].get("fixture",{}).get("id",0))!=leg.fixture_id:
+            raise HTTPException(422,f"第{data.legs.index(leg)+1}场比赛无法在 API-Football 中核实")
+        fixtures[leg.fixture_id]=rows[0]
+    now=datetime.now(timezone.utc)
+    created_at=now.isoformat()
+    resumed=[]
+    with TASK_LOCK:
+        with conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            # Recheck after provider calls to avoid creating a second watcher if
+            # another request added this fixture while validation was in flight.
+            current={int(row["fixture_id"]):dict(row) for row in c.execute(
+                "SELECT * FROM tasks WHERE fixture_id IN ("+",".join("?" for _ in data.legs)+")",
+                [leg.fixture_id for leg in data.legs])}
+            for leg in data.legs:
+                if leg.fixture_id not in current:
+                    fixture=fixtures[leg.fixture_id]
+                    kickoff=fixture["fixture"]["date"]
+                    home=fixture["teams"]["home"]["name"]
+                    away=fixture["teams"]["away"]["name"]
+                    league_name=(fixture.get("league") or {}).get("name")
+                    raw_start=leg.start_at
+                    if raw_start:
+                        try:
+                            start=datetime.fromisoformat(raw_start)
+                            if start.tzinfo is None:raise ValueError()
+                        except ValueError:raise HTTPException(422,"比赛腿开始监测时间必须带时区")
+                    else:
+                        start=datetime.fromisoformat(kickoff.replace("Z","+00:00"))+timedelta(minutes=120)
+                    next_at=max(start.astimezone(timezone.utc),now).isoformat()
+                    cur=c.execute("""INSERT INTO tasks(fixture_id,home,away,league_name,kickoff,start_at,interval_minutes,next_check,ticket_json,created_at,created_for_parlay)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,1)""",(leg.fixture_id,home,away,league_name,kickoff,start.isoformat(),leg.interval_minutes,next_at,"[]",created_at))
+                    current[leg.fixture_id]={"id":cur.lastrowid,"fixture_id":leg.fixture_id,"home":home,"away":away,"league_name":league_name,"kickoff":kickoff,"status":"pending","enabled":1}
+                else:
+                    row=current[leg.fixture_id]
+                    if row.get("status") in {"paused","stopped"}:
+                        c.execute("UPDATE tasks SET status='pending',enabled=1,next_check=? WHERE id=?",(now.isoformat(),row["id"]))
+                        row["status"]="pending";row["enabled"]=1;resumed.append(leg.fixture_id)
+            cur=c.execute("""INSERT INTO parlay_tickets(pass_type,multiples,unit_stake,total_stake,declared_payout,status,created_at,updated_at)
+                VALUES (?,?,?,?,?,'pending',?,?)""",(canonical,int(data.multiples),2.0,float(total),data.declared_payout,created_at,created_at))
+            parlay_id=cur.lastrowid
+            for index,leg in enumerate(data.legs):
+                row=current[leg.fixture_id]
+                c.execute("""INSERT INTO parlay_legs(parlay_id,leg_index,fixture_id,home,away,league_name,kickoff,market,selection,handicap,odds)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)""",(parlay_id,index,leg.fixture_id,row["home"],row["away"],row.get("league_name"),row.get("kickoff"),leg.market,leg.selection,leg.handicap,str(leg.odds)))
+    result=sync_parlay(parlay_id)
+    if result:result["resumed_fixture_ids"]=resumed
+    return result
+
+@app.post("/api/parlays/{parlay_id}/stop")
+def stop_parlay(parlay_id:int,_:str=Depends(auth)):
+    with TASK_LOCK:
+        with conn() as c:
+            row=c.execute("SELECT id FROM parlay_tickets WHERE id=?",(parlay_id,)).fetchone()
+            if not row:raise HTTPException(404,"Parlay ticket not found")
+            fixtures=[int(item[0]) for item in c.execute("SELECT fixture_id FROM parlay_legs WHERE parlay_id=?",(parlay_id,))]
+            c.execute("UPDATE parlay_tickets SET status='stopped',updated_at=? WHERE id=?",(datetime.now(timezone.utc).isoformat(),parlay_id))
+        stop_unused_parlay_watchers(fixtures)
+    return {"ok":True,"status":"stopped"}
+
+@app.delete("/api/parlays/{parlay_id}")
+def delete_parlay(parlay_id:int,_:str=Depends(auth)):
+    with TASK_LOCK:
+        with conn() as c:
+            fixtures=[int(item[0]) for item in c.execute("SELECT fixture_id FROM parlay_legs WHERE parlay_id=?",(parlay_id,))]
+            cur=c.execute("DELETE FROM parlay_tickets WHERE id=?",(parlay_id,))
+            if cur.rowcount==0:raise HTTPException(404,"Parlay ticket not found")
+        stop_unused_parlay_watchers(fixtures)
+    return {"ok":True,"deleted":parlay_id}
+
+@app.post("/api/parlays/{parlay_id}/legs/{leg_id}/confirm-void")
+def confirm_parlay_void(parlay_id:int,leg_id:int,data:ConfirmVoidIn,_:str=Depends(auth)):
+    if not data.confirmed:raise HTTPException(422,"Confirm that the official lottery result marks this fixture invalid")
+    with conn() as c:
+        row=c.execute("SELECT id FROM parlay_legs WHERE id=? AND parlay_id=?",(leg_id,parlay_id)).fetchone()
+        if not row:raise HTTPException(404,"Parlay leg not found")
+        c.execute("UPDATE parlay_legs SET void_confirmed=1 WHERE id=?",(leg_id,))
+        c.execute("UPDATE parlay_tickets SET status='pending',last_notified_state=NULL,updated_at=? WHERE id=?",(datetime.now(timezone.utc).isoformat(),parlay_id))
+    result=sync_parlay(parlay_id)
+    return result or {"ok":True}
+
+def has_open_parlay_for_fixture(fixture_id):
+    with conn() as c:
+        return c.execute("""SELECT 1 FROM parlay_legs l JOIN parlay_tickets p ON p.id=l.parlay_id
+            WHERE l.fixture_id=? AND p.status IN ('pending','review_required') LIMIT 1""",(fixture_id,)).fetchone() is not None
+
+def stop_unused_parlay_watchers(fixture_ids):
+    with conn() as c:
+        for fixture_id in set(fixture_ids):
+            task=c.execute("SELECT id,status,ticket_json,created_for_parlay FROM tasks WHERE fixture_id=?",(fixture_id,)).fetchone()
+            if not task or not task["created_for_parlay"] or json.loads(task["ticket_json"] or "[]") or task["status"] not in {"pending","running","paused"}:
+                continue
+            active=c.execute("""SELECT 1 FROM parlay_legs l JOIN parlay_tickets p ON p.id=l.parlay_id
+                WHERE l.fixture_id=? AND p.status IN ('pending','review_required') LIMIT 1""",(fixture_id,)).fetchone()
+            if not active:c.execute("UPDATE tasks SET status='stopped',enabled=0 WHERE id=?",(task["id"],))
+
 @app.post("/api/tasks")
 def create_task(data:TaskIn,_:str=Depends(auth)):
     tickets=validate_tickets(data.tickets)
@@ -454,8 +797,8 @@ def update_tickets(task_id:int,data:list[Ticket]|TicketUpdateIn,_:str=Depends(au
                     listed_scores=validate_listed_scores(data.listed_scores)
                     verified=bool(data.listed_scores_verified)
             validate_score_metadata(values,listed_scores,verified)
-            c.execute("UPDATE tasks SET ticket_json=?,listed_scores_json=?,listed_scores_verified=? WHERE id=?",
-                (json.dumps(values,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(verified),task_id))
+            c.execute("UPDATE tasks SET ticket_json=?,listed_scores_json=?,listed_scores_verified=?,created_for_parlay=CASE WHEN ?=1 THEN 0 ELSE created_for_parlay END WHERE id=?",
+                (json.dumps(values,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(verified),int(bool(values)),task_id))
     return {"ok":True,"tickets":len(values)}
 
 @app.put("/api/tasks/{task_id}/schedule")
@@ -492,6 +835,10 @@ def update_schedule(task_id:int,data:ScheduleUpdateIn,_:str=Depends(auth)):
 def delete_task(task_id:int,_:str=Depends(auth)):
     with TASK_LOCK:
         with conn() as c:
+            task=c.execute("SELECT fixture_id FROM tasks WHERE id=?",(task_id,)).fetchone()
+            if not task:raise HTTPException(404,"Task not found")
+            if has_open_parlay_for_fixture(int(task["fixture_id"])):
+                raise HTTPException(409,"此比赛仍被未结算的过关票引用；请先停止或删除过关票")
             result=c.execute("DELETE FROM tasks WHERE id=?",(task_id,))
             if result.rowcount==0:raise HTTPException(404,"Task not found")
     return {"ok":True,"deleted":task_id}
@@ -504,6 +851,9 @@ def task_action(task_id:int,action:str,_:str=Depends(auth)):
             row=c.execute("SELECT status,start_at FROM tasks WHERE id=?",(task_id,)).fetchone()
             if not row:raise HTTPException(404,"Task not found")
             if row["status"] in {"finished","review_required"}:raise HTTPException(409,"Finished match cannot be resumed")
+            fixture=c.execute("SELECT fixture_id FROM tasks WHERE id=?",(task_id,)).fetchone()[0]
+            if action in {"pause","stop"} and has_open_parlay_for_fixture(int(fixture)):
+                raise HTTPException(409,"此比赛仍被未结算的过关票引用；请先停止或删除过关票")
             next_at=max(datetime.now(timezone.utc),datetime.fromisoformat(row["start_at"]).astimezone(timezone.utc)).isoformat()
             vals={"pause":("paused",0),"resume":("pending",1),"stop":("stopped",0)}
             status,enabled=vals[action]
@@ -528,6 +878,14 @@ def ocr_parser(_:str=Depends(auth)):
 @app.get("/ocr-ui.js")
 def ocr_ui(_:str=Depends(auth)):
     return FileResponse(Path(__file__).with_name("ocr-ui.js"),media_type="application/javascript",headers={"Cache-Control":"no-store"})
+
+@app.get("/parlay-parser.js")
+def parlay_parser(_:str=Depends(auth)):
+    return FileResponse(Path(__file__).with_name("parlay-parser.js"),media_type="application/javascript",headers={"Cache-Control":"no-store"})
+
+@app.get("/parlay-ui.js")
+def parlay_ui(_:str=Depends(auth)):
+    return FileResponse(Path(__file__).with_name("parlay-ui.js"),media_type="application/javascript",headers={"Cache-Control":"no-store"})
 
 @app.get("/teams-map.js")
 def teams_map(_:str=Depends(auth)):
