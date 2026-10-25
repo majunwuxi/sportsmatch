@@ -166,4 +166,4 @@ test('parlay API proxy requires an authenticated Site visitor and allows only sc
   assert.equal((await worker.fetch(req('/api/parlays',{method:'POST',headers:{'oai-authenticated-user-id':'owner',origin:'https://evil.example'}}),env)).status,403);
  }finally{globalThis.fetch=old}
 });
-test('parlay table names generated rows as combinations instead of bets',async()=>{const source=await (await worker.fetch(req('/parlay-ui.js'),{})).text();assert.match(source,/<th>过关组合<\\/th>/);assert.match(source,/组合 \\$\\{combo\\.number\\}/);assert.doesNotMatch(source,/第\\$\\{combo\\.number\\}注/) });
+test('parlay table names generated rows as combinations instead of bets',async()=>{const source=await (await worker.fetch(req('/parlay-ui.js'),{})).text();assert.match(source,/<th>过关组合<\/th>/);assert.match(source,/组合 \$\{combo\.number\}/);assert.doesNotMatch(source,/第\$\{combo\.number\}注/) });
