@@ -101,3 +101,10 @@ Keep the existing backend secrets in their current server-side environment. Foll
 - Verification: backend `pytest tests/test_app.py` — 59/59 passed; OCR parser plus packaged Worker tests — 65/65 passed; isolated Site Worker tests — 41/41 passed; Site build and ESM artifact validation passed.
 - Deployed owner-only ChatGPT Site version 49 successfully at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site). Site source commit: `e3147f67f827dd965899c6e2d9da37db6115587c`. Post-deploy access check: owner role, one allowed user, zero groups, zero external visitors.
 - The amstd server and its services were not accessed or restarted. The GitHub update still needs to be pulled there and only `sportsmatch-web.service` restarted. `napoli-monitor.service` remains untouched.
+
+## 2026-10-25 — Show first monitoring activation time for each parlay leg
+
+- The API response now carries the linked fixture task's scheduled `start_at` for each parlay leg. The leg card displays it below the selection in Beijing time; new parlay-created watchers default to kickoff + 120 minutes and reused tasks retain their configured start time.
+- Site Worker bundle regenerated from the dashboard and parlay UI sources, then built and validated. Owner-only Site version 50 deployed at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site). Site source commit: `964a7e9ce0d4d87f35147cbc1b5e269c60d6a64e`.
+- Post-deploy access check: owner role, custom owner-only access, one allowed user, zero groups, zero external visitors. No Site secrets or personal betting records were changed or included.
+- The amstd backend was not accessed. Pull the GitHub update and restart only `sportsmatch-web.service` to return `monitor_start_at`; `napoli-monitor.service` remains untouched.

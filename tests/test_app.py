@@ -224,6 +224,7 @@ def test_parlay_settlement_reuses_existing_total_goals_watchers(client,monkeypat
     with m.conn() as c:
         assert c.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]==2
         assert c.execute('SELECT COUNT(*) FROM parlay_legs').fetchone()[0]==2
+        first_activation=c.execute('SELECT start_at FROM tasks WHERE fixture_id=12').fetchone()[0]
         c.execute("UPDATE tasks SET status='finished',enabled=0,last_score='1:0',settlement_score='1:0',provider_status='FT'")
     settled=client.get('/api/parlays',auth=('test','test-password')).json()[0]
     assert settled['status']=='won'
@@ -231,6 +232,7 @@ def test_parlay_settlement_reuses_existing_total_goals_watchers(client,monkeypat
     assert settled['net']==8.65
     assert settled['payout_matches_ticket'] is True
     assert all(leg['state']=='won' for leg in settled['legs'])
+    assert settled['legs'][0]['monitor_start_at']==first_activation
 
 def test_parlay_loses_if_any_leg_in_a_2_by_1_loses(client):
     _seed_task(12,'Inter','Fiorentina','finished','1:0')
@@ -351,6 +353,7 @@ def test_parlay_created_score_only_watchers_stop_with_their_last_ticket(client,m
     created=client.post('/api/parlays',auth=('test','test-password'),json=body)
     assert created.status_code==200,created.text
     assert calls==[12,13]
+    assert created.json()['legs'][0]['monitor_start_at']=='2026-10-25T14:00:00+00:00'
     with m.conn() as c:
         assert c.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]==2
         assert c.execute('SELECT COUNT(*) FROM tasks WHERE created_for_parlay=1').fetchone()[0]==2
@@ -588,6 +591,7 @@ def test_existing_database_migration_preserves_tasks_and_tickets(monkeypatch,tmp
 
 def test_index_contains_simulator_and_no_old_score_calculator():
     html=(m.Path(__file__).parents[1]/'index.html').read_text(encoding='utf-8')
+    parlay_ui=(m.Path(__file__).parents[1]/'parlay-ui.js').read_text(encoding='utf-8')
     assert '竞彩足球比分投注模拟器' in html
     assert 'class="search-parlay-layout"' in html
     assert 'class="dashboard-layout"' in html and 'class="dashboard-left"' in html
@@ -598,6 +602,7 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert '下载JSON文件' not in html and '复制投注 JSON' in html and '自动均衡分配' in html
     assert 'betScreenshot' in html and 'ocrConfirm' in html and '/ocr-parser.js' in html and '/ocr-ui.js' in html
     assert 'id="simulatorManual" hidden' in html and 'id="manualMode"' in html
+    assert 'leg.monitor_start_at' in parlay_ui and '首次激活监测（北京时间）' in parlay_ui
     assert 'id="ocrBudget"' in html and 'ocr-balance-row' in html
     assert 'id="ocrSelectedCount"' in html and 'id="ocrSelectedTotal"' in html
     assert 'id="exportOcrJson"' in html and 'id="applyOcrJson"' in html

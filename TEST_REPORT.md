@@ -355,3 +355,10 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - System tickets keep monitoring only fixtures still used by a pending or reviewable combination. A regression test verifies that one loss in a three-leg 3串3 ticket eliminates two combinations but preserves the remaining combination's watchers.
 - Verification: `uv run --with 'fastapi>=0.115,<1' --with httpx --with pytest python -m pytest tests/test_app.py -q` — 62 passed; Python byte-compilation, JavaScript syntax checks, and `git diff --check` passed. The Site frontend did not change in this update.
 - The amstd server was not accessed. Apply this backend change by pulling GitHub `main` and restarting only `sportsmatch-web.service`; `napoli-monitor.service` remains untouched.
+
+## 2026-10-25 — Show each parlay leg's first monitoring time
+
+- Every parlay leg now includes the linked monitor task's scheduled first activation time, displayed in Beijing time beneath that match's selection. Newly created watchers use kickoff + 120 minutes; reused match tasks show their existing schedule.
+- Verification: backend pytest — 62 passed; OCR parser plus Site Worker tests — 65 passed; isolated Site Worker tests — 41 passed; Site build and ESM artifact validation, Python byte-compilation, JavaScript syntax checks, and `git diff --check` passed.
+- Owner-only Site version 50 deployed at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site), Site source commit `964a7e9ce0d4d87f35147cbc1b5e269c60d6a64e`. Access remains owner-only with one allowed user, zero groups, and zero external visitors.
+- The amstd backend was not accessed. Pull the matching GitHub update and restart only `sportsmatch-web.service` for the backend payload field; `napoli-monitor.service` remains untouched.
