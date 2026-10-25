@@ -606,6 +606,10 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert '<th>过关组合</th>' in parlay_ui
     assert '`组合 ${combo.number}（' in parlay_ui
     assert '第${combo.number}注' not in parlay_ui
+    assert 'leg.state==="won"||leg.state==="lost"' in parlay_ui
+    assert 'parlay-result-badge parlay-result-${leg.state}' in parlay_ui
+    assert '.parlay-result-won{background:#c62828;color:#fff}' in html
+    assert '.parlay-result-lost{background:#111;color:#fff}' in html
     assert 'id="ocrBudget"' in html and 'ocr-balance-row' in html
     assert 'id="ocrSelectedCount"' in html and 'id="ocrSelectedTotal"' in html
     assert 'id="exportOcrJson"' in html and 'id="applyOcrJson"' in html
@@ -625,6 +629,9 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert '.task.task-finished-old{background:#f59e0b' in html
     assert 'finishedTaskColorClass(t.status,t.kickoff)' in html
     assert 'function finishedTaskColorClass(status,value,now=Date.now())' in html
+    assert 't.status==="finished"&&taskPayout>0&&(t.settlement?.tickets||[]).some(ticket=>ticket.won===true)' in html
+    assert 'payoutBubble.textContent="返奖总额 "+money(taskPayout)' in html
+    assert '.task-payout-bubble{display:inline-flex;align-items:center;border-radius:999px' in html
     ui=(m.Path(__file__).parents[1]/'ocr-ui.js').read_text(encoding='utf-8')
     assert 'Number($("ocrBudget").value)' in ui and 'hasRecognizedSelections' in ui
     assert '$("ocrSelectedTotal").textContent = money(total)' in ui
