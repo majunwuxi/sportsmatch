@@ -603,6 +603,9 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert 'betScreenshot' in html and 'ocrConfirm' in html and '/ocr-parser.js' in html and '/ocr-ui.js' in html
     assert 'id="simulatorManual" hidden' in html and 'id="manualMode"' in html
     assert 'leg.monitor_start_at' in parlay_ui and '首次激活监测（北京时间）' in parlay_ui
+    assert '<th>过关组合</th>' in parlay_ui
+    assert '`组合 ${combo.number}（' in parlay_ui
+    assert '第${combo.number}注' not in parlay_ui
     assert 'id="ocrBudget"' in html and 'ocr-balance-row' in html
     assert 'id="ocrSelectedCount"' in html and 'id="ocrSelectedTotal"' in html
     assert 'id="exportOcrJson"' in html and 'id="applyOcrJson"' in html

@@ -384,3 +384,10 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Boundary regression tests cover exactly 12 hours, just over 12 hours, unfinished cards with old kickoffs, and invalid kickoff data.
 - Verification: backend pytest — 62 passed; root OCR and Worker tests — 66 passed; Site Worker tests — 42 passed; Site build and ESM validation passed.
 - Owner-only Site version 53 is live at https://bm.sendmymail.top, source commit `95f6f84181316cfdbe4a3d4f8c62c1b52f0ea8eb`. Access remains one owner, zero groups, and no external visitors. No amstd or systemd services were changed.
+
+## 2026-10-25 — Clarify generated parlay combination labels
+
+- In the settlement table, the header is now “过关组合” and generated rows use “组合 1、组合 2 …” instead of “第1注”. Each row represents one generated combination of match legs; it is not a single match and does not replace the ticket-wide 注 count.
+- Regression tests verify the table label and ensure the old numbered-bet wording is absent.
+- Verification: backend pytest — 62 passed; Site Worker tests — 43 passed; Site build and ESM validation passed.
+- Owner-only Site version 54 is live at https://bm.sendmymail.top, source commit `992dddd6b0c3bee70103c71fbebef47b2fd515d9`. Access remains owner-only. No amstd or systemd services were changed.
