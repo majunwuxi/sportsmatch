@@ -108,3 +108,10 @@ Keep the existing backend secrets in their current server-side environment. Foll
 - Site Worker bundle regenerated from the dashboard and parlay UI sources, then built and validated. Owner-only Site version 50 deployed at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site). Site source commit: `964a7e9ce0d4d87f35147cbc1b5e269c60d6a64e`.
 - Post-deploy access check: owner role, custom owner-only access, one allowed user, zero groups, zero external visitors. No Site secrets or personal betting records were changed or included.
 - The amstd backend was not accessed. Pull the GitHub update and restart only `sportsmatch-web.service` to return `monitor_start_at`; `napoli-monitor.service` remains untouched.
+
+## 2026-10-25 — Orange task cards for fixtures over 12 hours away
+
+- Task cards use the Beijing-aware kickoff timestamp. If a match kickoff is strictly more than 12 hours away, the card uses a light orange background. At 12 hours or less, it uses the normal background; `finished` remains yellow.
+- Tests cover the strict 12-hour boundary and confirm the finished-card class takes precedence.
+- Regenerated and validated the Sites Worker bundle. Owner-only Site version 51 is live at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site). Source commit: `37f099c5ffabc8e332ed210cd0e0344867cf031d`.
+- Access was rechecked after deployment: owner role, custom access, one allowed user, zero groups, zero external visitors. The amstd server was not accessed; pull the GitHub update and restart only `sportsmatch-web.service`. `napoli-monitor.service` remains untouched.

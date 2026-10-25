@@ -619,7 +619,9 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert 'textContent="删除"' in html and 'colSpan=6' in html
     assert 'ticketUpdatesInFlight' in html and '保存失败：' in html
     assert '.task.task-finished{background:#fff7d6' in html
-    assert 'box.className="task"+(t.status==="finished"?" task-finished":"")' in html
+    assert '.task.task-far-future{background:#fff0dc' in html
+    assert 'box.className="task"+(t.status==="finished"?" task-finished":isMoreThan12HoursUntilKickoff(t.kickoff)?" task-far-future":"")' in html
+    assert 'function isMoreThan12HoursUntilKickoff(value,now=Date.now())' in html
     ui=(m.Path(__file__).parents[1]/'ocr-ui.js').read_text(encoding='utf-8')
     assert 'Number($("ocrBudget").value)' in ui and 'hasRecognizedSelections' in ui
     assert '$("ocrSelectedTotal").textContent = money(total)' in ui

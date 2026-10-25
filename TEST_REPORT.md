@@ -362,3 +362,11 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Verification: backend pytest — 62 passed; OCR parser plus Site Worker tests — 65 passed; isolated Site Worker tests — 41 passed; Site build and ESM artifact validation, Python byte-compilation, JavaScript syntax checks, and `git diff --check` passed.
 - Owner-only Site version 50 deployed at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site), Site source commit `964a7e9ce0d4d87f35147cbc1b5e269c60d6a64e`. Access remains owner-only with one allowed user, zero groups, and zero external visitors.
 - The amstd backend was not accessed. Pull the matching GitHub update and restart only `sportsmatch-web.service` for the backend payload field; `napoli-monitor.service` remains untouched.
+
+## 2026-10-25 — Orange background for matches more than 12 hours away
+
+- Upcoming task cards turn light orange when kickoff is strictly more than 12 hours from the browser's current time, using the same Beijing-aware kickoff parser as the page. At 12 hours or less the normal background remains; finished tasks retain their yellow background.
+- Regression tests cover just over 12 hours, exactly 12 hours, under 12 hours, invalid dates, and finished-task color precedence.
+- Verification: backend pytest — 62 passed; OCR parser plus Site Worker tests — 66 passed; packaged Site Worker tests — 42 passed; Site build and ESM artifact validation, Python byte-compilation, JavaScript syntax, and `git diff --check` passed.
+- Owner-only Site version 51 deployed successfully at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site), source commit `37f099c5ffabc8e332ed210cd0e0344867cf031d`. Access remains custom owner-only with one allowed user, no groups, and no external visitors.
+- The amstd server was not accessed. Pull the GitHub update and restart only `sportsmatch-web.service` to apply the card color; `napoli-monitor.service` is untouched.
