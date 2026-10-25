@@ -377,3 +377,10 @@ This change adds only frontend OCR asset routes; it does not alter database sche
 - Regression coverage checks the 12-hour boundary, an elapsed time greater than 12 hours, a pending match with an old kickoff, and an invalid kickoff.
 - Verification: backend pytest — 62 passed; root OCR and Worker tests — 66 passed; packaged Site Worker tests — 42 passed; Site build and ESM validation passed.
 - Owner-only Site version 52 is live at https://bm.sendmymail.top (canonical URL: https://wellmax-match-monitor.letnek-majun.chatgpt.site), Site source commit `7fbbf6d2fd1231db73a0231265ca0ff38891a2ac`. Access remains one owner, zero groups, and zero external visitors. No amstd or systemd services were changed.
+
+## 2026-10-25 — Use deep orange for older completed matches
+
+- Only completed task cards change color by kickoff age. They stay yellow through exactly 12 hours after kickoff, then use a saturated deep-orange background (`#f59e0b`) strictly after 12 hours. Unfinished cards remain unchanged regardless of kickoff age.
+- Boundary regression tests cover exactly 12 hours, just over 12 hours, unfinished cards with old kickoffs, and invalid kickoff data.
+- Verification: backend pytest — 62 passed; root OCR and Worker tests — 66 passed; Site Worker tests — 42 passed; Site build and ESM validation passed.
+- Owner-only Site version 53 is live at https://bm.sendmymail.top, source commit `95f6f84181316cfdbe4a3d4f8c62c1b52f0ea8eb`. Access remains one owner, zero groups, and no external visitors. No amstd or systemd services were changed.

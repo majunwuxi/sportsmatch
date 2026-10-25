@@ -619,7 +619,7 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert 'textContent="删除"' in html and 'colSpan=6' in html
     assert 'ticketUpdatesInFlight' in html and '保存失败：' in html
     assert '.task.task-finished{background:#fff7d6' in html
-    assert '.task.task-finished-old{background:#fff0dc' in html
+    assert '.task.task-finished-old{background:#f59e0b' in html
     assert 'finishedTaskColorClass(t.status,t.kickoff)' in html
     assert 'function finishedTaskColorClass(status,value,now=Date.now())' in html
     ui=(m.Path(__file__).parents[1]/'ocr-ui.js').read_text(encoding='utf-8')
