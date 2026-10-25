@@ -606,6 +606,10 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert '<th>过关组合</th>' in parlay_ui
     assert '`组合 ${combo.number}（' in parlay_ui
     assert '第${combo.number}注' not in parlay_ui
+    assert 'leg.state==="won"||leg.state==="lost"' in parlay_ui
+    assert 'parlay-result-badge parlay-result-${leg.state}' in parlay_ui
+    assert '.parlay-result-won{background:#c62828;color:#fff}' in html
+    assert '.parlay-result-lost{background:#111;color:#fff}' in html
     assert 'id="ocrBudget"' in html and 'ocr-balance-row' in html
     assert 'id="ocrSelectedCount"' in html and 'id="ocrSelectedTotal"' in html
     assert 'id="exportOcrJson"' in html and 'id="applyOcrJson"' in html
