@@ -183,6 +183,13 @@ def test_auth(client):
     assert client.delete('/api/tasks/1').status_code==401
     assert client.delete('/api/tasks/1',auth=('test','test-password'),headers={'origin':'https://evil.example'}).status_code==403
 
+def test_self_hosted_ui_origin_is_allowed_for_authenticated_writes(client,monkeypatch):
+    monkeypatch.setenv('PUBLIC_ORIGIN','https://sportsmatch.sendmymail.top')
+    response=client.put('/api/tasks/1/schedule',auth=('test','test-password'),
+        headers={'origin':'https://sportsmatch.sendmymail.top'},
+        json={'start_at':'2026-10-26T12:00:00+08:00','interval_minutes':10})
+    assert response.status_code==404
+
 def test_health_advertises_screenshot_score_list_support(client):
     response=client.get('/api/health',auth=('test','test-password'))
     assert response.status_code==200

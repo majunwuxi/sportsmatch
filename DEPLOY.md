@@ -76,7 +76,7 @@ ssh -L 8765:127.0.0.1:8765 root@YOUR_SERVER
 
 ## Sites proxy and current repair release
 
-Use the new independent backend only; do not alter the legacy service. Configure `PUBLIC_ORIGIN` to the self-hosted UI origin if using the backend UI directly. Sites server proxy calls have no browser Origin header and use Basic authentication over HTTPS. Keep the backend behind TLS and restrict network access where possible. Disable public debug logging and use strong ASCII service credentials.
+Use the new independent backend only; do not alter the legacy service. For direct use of the self-hosted UI, set `PUBLIC_ORIGIN=https://sportsmatch.sendmymail.top` in `/opt/sportsmatch/.env` (scheme and host only, no trailing slash). This must exactly match the browser address bar origin; otherwise state-changing requests such as creating a task return `Cross-origin write denied` (HTTP 403). Sites server proxy calls omit the browser Origin header and use Basic authentication over HTTPS, so this setting does not affect those requests. Keep the backend behind TLS and restrict network access where possible. Disable public debug logging and use strong ASCII service credentials.
 
 Set Sites `BACKEND_URL`, `BACKEND_USER`, `BACKEND_PASSWORD` as runtime secrets, then deploy the saved Site version again. Never enter these into frontend code. Python dependencies for verification: `pip install pytest httpx`; run `python -m pytest -q` and `node --test site/worker/test.mjs`.
 
