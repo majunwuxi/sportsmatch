@@ -115,6 +115,8 @@ def init_db():
           parlay_id INTEGER NOT NULL REFERENCES parlay_tickets(id) ON DELETE CASCADE,
           leg_index INTEGER NOT NULL,
           fixture_id INTEGER NOT NULL,
+          sport TEXT NOT NULL DEFAULT 'football',
+          league_code TEXT,
           home TEXT NOT NULL,
           away TEXT NOT NULL,
           league_name TEXT,
@@ -122,6 +124,7 @@ def init_db():
           market TEXT NOT NULL,
           selection TEXT NOT NULL,
           handicap INTEGER,
+          line REAL,
           odds TEXT NOT NULL,
           void_confirmed INTEGER NOT NULL DEFAULT 0,
           UNIQUE(parlay_id,leg_index)
@@ -154,6 +157,10 @@ def init_db():
         c.execute("UPDATE tasks SET league_code='nba' WHERE sport='basketball' AND (league_code IS NULL OR league_code='')")
         c.execute("UPDATE tasks SET provider_game_id=CAST(fixture_id AS TEXT) WHERE sport='football' AND provider_game_id IS NULL")
         c.execute("UPDATE tasks SET finished_at=COALESCE(NULLIF(last_check,''),created_at) WHERE status='finished' AND finished_at IS NULL")
+        parlay_columns={r[1] for r in c.execute("PRAGMA table_info(parlay_legs)")}
+        if "sport" not in parlay_columns:c.execute("ALTER TABLE parlay_legs ADD COLUMN sport TEXT NOT NULL DEFAULT 'football'")
+        if "league_code" not in parlay_columns:c.execute("ALTER TABLE parlay_legs ADD COLUMN league_code TEXT")
+        if "line" not in parlay_columns:c.execute("ALTER TABLE parlay_legs ADD COLUMN line REAL")
 
 def auth(credentials:HTTPBasicCredentials=Depends(BASIC)):
     username=os.getenv("ADMIN_USER","")
@@ -426,6 +433,7 @@ def _tick_basketball(task):
         f"状态：{status_text}{clock_text}\n赛事：{competition}\n{calc}")
     if requires_review:message+="\n比赛已取消或中止，请核对官方状态；系统不会自动结算。"
     elif closed:message+="\n终场比分已记录，比分监测已结束。"
+    elif not tickets:message+="\n该比赛比分会供关联的竞彩篮球过关票结算使用。"
     elif tickets:message+="\n命中投注："+("；".join(f"{r['market_label']} {r['selection']} ¥{r['stake']:g} → 返奖 ¥{r['payout']:.2f}" for r in result["tickets"] if r["won"] is True) or "当前暂无命中")
     changed=task.get("last_score")!=score or task.get("provider_status")!=provider_status
     if changed or closed:notify(message)
@@ -437,6 +445,7 @@ def _tick_basketball(task):
             finished_at=CASE WHEN ?='finished' THEN COALESCE(finished_at,?) ELSE finished_at END,error=NULL
             WHERE id=? AND enabled=1 AND status IN ('pending','running')""",
             (kickoff_value,score,score,provider_status,now.isoformat(),next_at,task_status,task_status,now.isoformat(),task["id"]))
+    sync_parlays_for_fixture(int(task["fixture_id"]))
 
 def _tick(task):
     if task.get("sport","football")=="basketball":return _tick_basketball(task)
@@ -574,10 +583,13 @@ class ScheduleUpdateIn(BaseModel):
 
 class ParlayLegIn(BaseModel):
     fixture_id:int=Field(gt=0)
+    sport:Literal["football","basketball"]="football"
+    league_code:Literal["nba","wnba"]="nba"
     market:str
     selection:str
     odds:float=Field(ge=1,allow_inf_nan=False)
-    handicap:int|None=None
+    handicap:float|None=Field(default=None,allow_inf_nan=False)
+    line:float|None=Field(default=None,allow_inf_nan=False)
     start_at:str|None=None
     interval_minutes:int=Field(default=10,ge=1,le=120)
 
@@ -697,8 +709,11 @@ def evaluate_parlay(parlay,legs,tasks_by_fixture):
         if state=="pending" and task and task.get("status") in {"paused","stopped"}:
             status_text="监测已暂停"
         leg_results.append({"id":int(leg["id"]),"leg_index":int(leg["leg_index"]),"fixture_id":int(leg["fixture_id"]),"home":leg["home"],"away":leg["away"],
-            "league_name":leg.get("league_name"),"kickoff":leg.get("kickoff"),"monitor_start_at":task.get("start_at") if task else None,"market":leg["market"],"market_label":MARKETS.get(leg["market"],"玩法"),
-            "selection":leg["selection"],"handicap":leg.get("handicap"),"odds":float(leg["odds"]),"score":settle_value or current_score,
+            "sport":leg.get("sport") or "football","league_code":leg.get("league_code"),"league_name":leg.get("league_name"),"kickoff":leg.get("kickoff"),
+            "home_cn":BASKETBALL_TEAM_NAMES_ZH.get(leg["home"],"") if leg.get("sport")=="basketball" else "",
+            "away_cn":BASKETBALL_TEAM_NAMES_ZH.get(leg["away"],"") if leg.get("sport")=="basketball" else "",
+            "monitor_start_at":task.get("start_at") if task else None,"market":leg["market"],"market_label":MARKETS.get(leg["market"],"玩法"),
+            "selection":leg["selection"],"handicap":leg.get("handicap"),"line":leg.get("line"),"odds":float(leg["odds"]),"score":settle_value or current_score,
             "match_status":task.get("provider_status") if task else None,"task_status":task.get("status") if task else None,
             "state":state,"status_cn":status_text,"current_result":live_result,"void_confirmed":bool(leg.get("void_confirmed"))})
 
@@ -898,7 +913,7 @@ def get_parlays(_:str=Depends(auth)):
 @app.post("/api/parlays")
 def create_parlay(data:ParlayIn,_:str=Depends(auth)):
     if not 2<=len(data.legs)<=8:raise HTTPException(422,"过关票须包含2到8场比赛")
-    if len({leg.fixture_id for leg in data.legs})!=len(data.legs):raise HTTPException(422,"同一场比赛不能重复作为多条比赛腿")
+    if len({leg.sport for leg in data.legs})!=1:raise HTTPException(422,"同一张过关票不能混合足球和篮球比赛")
     if Decimal(str(data.unit_stake))!=Decimal("2"):raise HTTPException(422,"竞彩过关每注金额必须为2元")
     try:canonical,combos=pass_combinations(len(data.legs),data.pass_type)
     except HTTPException:raise
@@ -907,22 +922,49 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
     total=Decimal("2")*int(data.multiples)*count
     if data.declared_total is not None and _money(data.declared_total)!=_money(total):
         raise HTTPException(422,f"票面总金额与过关组合数不符：按此过关方式应为¥{total:.2f}")
+    internal_ids={}
+    canonical_legs={}
     for leg in data.legs:
-        candidate=Ticket(selection=leg.selection,market=leg.market,stake=2,odds=leg.odds,handicap=leg.handicap)
-        validate_tickets([candidate])
-    # Reuse existing task rows by fixture ID. Only missing matches need a
-    # provider lookup and a score-only watcher, so each fixture is polled once.
+        if leg.sport=="basketball":
+            namespace=BALLDONTLIE_GAME_ID_BASE[leg.league_code]
+            if leg.fixture_id>=namespace:raise HTTPException(422,"BallDontLie 比赛 ID 无效")
+            internal_id=namespace+leg.fixture_id
+        else:internal_id=leg.fixture_id
+        if internal_id in internal_ids.values():raise HTTPException(422,"同一场比赛不能重复作为多条比赛腿")
+        internal_ids[id(leg)]=internal_id
+        candidate=Ticket(selection=leg.selection,market=leg.market,stake=2,odds=leg.odds,handicap=leg.handicap,line=leg.line)
+        canonical_legs[id(leg)]=validate_tickets([candidate],leg.sport)[0]
+    # Reuse existing task rows by provider-specific ID. Basketball IDs are
+    # namespaced so NBA, WNBA, and API-Football fixtures cannot collide.
+    fixture_ids=list(internal_ids.values())
     fixtures={}
     with conn() as c:
         existing={int(row["fixture_id"]):dict(row) for row in c.execute(
-            "SELECT * FROM tasks WHERE fixture_id IN ("+",".join("?" for _ in data.legs)+")",
-            [leg.fixture_id for leg in data.legs])}
+            "SELECT * FROM tasks WHERE fixture_id IN ("+",".join("?" for _ in fixture_ids)+")",fixture_ids)}
     for leg in data.legs:
-        if leg.fixture_id in existing:continue
-        rows=api("fixtures",{"id":leg.fixture_id,"timezone":"Asia/Shanghai"})
-        if len(rows)!=1 or int(rows[0].get("fixture",{}).get("id",0))!=leg.fixture_id:
-            raise HTTPException(422,f"第{data.legs.index(leg)+1}场比赛无法在 API-Football 中核实")
-        fixtures[leg.fixture_id]=rows[0]
+        internal_id=internal_ids[id(leg)]
+        if internal_id in existing:continue
+        if leg.sport=="basketball":
+            payload=balldontlie_api(f"games/{leg.fixture_id}",league_code=leg.league_code)
+            fixture=payload.get("data")
+            if not isinstance(fixture,dict) or int(fixture.get("id",0))!=leg.fixture_id:
+                raise HTTPException(422,f"第{data.legs.index(leg)+1}场比赛无法在 {leg.league_code.upper()} 数据中核实")
+            home=(fixture.get("home_team") or {}).get("full_name") or ""
+            away=(fixture.get("visitor_team") or {}).get("full_name") or ""
+            kickoff=_bdl_datetime(fixture.get("datetime") or fixture.get("date"))
+            if not home or not away or kickoff is None:raise HTTPException(422,"BallDontLie 未提供完整的球队名称或开赛时间")
+            postseason=bool(fixture.get("postseason"))
+            league_name=("WNBA季后赛" if postseason else "WNBA") if leg.league_code=="wnba" else "NBA季后赛" if postseason else "NBA杯" if fixture.get("ist_stage") else "NBA"
+            fixtures[internal_id]={"sport":"basketball","provider_game_id":str(leg.fixture_id),"league_code":leg.league_code,
+                "home":home,"away":away,"league_name":league_name,"kickoff":kickoff.isoformat()}
+        else:
+            rows=api("fixtures",{"id":leg.fixture_id,"timezone":"Asia/Shanghai"})
+            if len(rows)!=1 or int(rows[0].get("fixture",{}).get("id",0))!=leg.fixture_id:
+                raise HTTPException(422,f"第{data.legs.index(leg)+1}场比赛无法在 API-Football 中核实")
+            fixture=rows[0]
+            fixtures[internal_id]={"sport":"football","provider_game_id":str(leg.fixture_id),"league_code":None,
+                "home":fixture["teams"]["home"]["name"],"away":fixture["teams"]["away"]["name"],
+                "league_name":(fixture.get("league") or {}).get("name"),"kickoff":fixture["fixture"]["date"]}
     now=datetime.now(timezone.utc)
     created_at=now.isoformat()
     resumed=[]
@@ -932,15 +974,12 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
             # Recheck after provider calls to avoid creating a second watcher if
             # another request added this fixture while validation was in flight.
             current={int(row["fixture_id"]):dict(row) for row in c.execute(
-                "SELECT * FROM tasks WHERE fixture_id IN ("+",".join("?" for _ in data.legs)+")",
-                [leg.fixture_id for leg in data.legs])}
+                "SELECT * FROM tasks WHERE fixture_id IN ("+",".join("?" for _ in fixture_ids)+")",fixture_ids)}
             for leg in data.legs:
-                if leg.fixture_id not in current:
-                    fixture=fixtures[leg.fixture_id]
-                    kickoff=fixture["fixture"]["date"]
-                    home=fixture["teams"]["home"]["name"]
-                    away=fixture["teams"]["away"]["name"]
-                    league_name=(fixture.get("league") or {}).get("name")
+                internal_id=internal_ids[id(leg)]
+                if internal_id not in current:
+                    fixture=fixtures[internal_id]
+                    kickoff=fixture["kickoff"]
                     raw_start=leg.start_at
                     if raw_start:
                         try:
@@ -948,13 +987,13 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
                             if start.tzinfo is None:raise ValueError()
                         except ValueError:raise HTTPException(422,"比赛腿开始监测时间必须带时区")
                     else:
-                        start=datetime.fromisoformat(kickoff.replace("Z","+00:00"))+timedelta(minutes=120)
+                        start=_utc_datetime(kickoff)+timedelta(minutes=150 if leg.sport=="basketball" else 120)
                     next_at=max(start.astimezone(timezone.utc),now).isoformat()
-                    cur=c.execute("""INSERT INTO tasks(fixture_id,home,away,league_name,kickoff,start_at,interval_minutes,next_check,ticket_json,created_at,created_for_parlay)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,1)""",(leg.fixture_id,home,away,league_name,kickoff,start.isoformat(),leg.interval_minutes,next_at,"[]",created_at))
-                    current[leg.fixture_id]={"id":cur.lastrowid,"fixture_id":leg.fixture_id,"home":home,"away":away,"league_name":league_name,"kickoff":kickoff,"status":"pending","enabled":1}
+                    cur=c.execute("""INSERT INTO tasks(fixture_id,provider_game_id,league_code,sport,home,away,league_name,kickoff,start_at,interval_minutes,next_check,ticket_json,created_at,created_for_parlay)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",(internal_id,fixture["provider_game_id"],fixture["league_code"],fixture["sport"],fixture["home"],fixture["away"],fixture["league_name"],kickoff,start.isoformat(),leg.interval_minutes,next_at,"[]",created_at))
+                    current[internal_id]={"id":cur.lastrowid,"fixture_id":internal_id,"home":fixture["home"],"away":fixture["away"],"league_name":fixture["league_name"],"kickoff":kickoff,"status":"pending","enabled":1}
                 else:
-                    row=current[leg.fixture_id]
+                    row=current[internal_id]
                     if row.get("status") in {"paused","stopped"}:
                         c.execute("UPDATE tasks SET status='pending',enabled=1,next_check=? WHERE id=?",(now.isoformat(),row["id"]))
                         row["status"]="pending";row["enabled"]=1;resumed.append(leg.fixture_id)
@@ -962,9 +1001,11 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
                 VALUES (?,?,?,?,?,'pending',?,?)""",(canonical,int(data.multiples),2.0,float(total),data.declared_payout,created_at,created_at))
             parlay_id=cur.lastrowid
             for index,leg in enumerate(data.legs):
-                row=current[leg.fixture_id]
-                c.execute("""INSERT INTO parlay_legs(parlay_id,leg_index,fixture_id,home,away,league_name,kickoff,market,selection,handicap,odds)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)""",(parlay_id,index,leg.fixture_id,row["home"],row["away"],row.get("league_name"),row.get("kickoff"),leg.market,leg.selection,leg.handicap,str(leg.odds)))
+                row=current[internal_ids[id(leg)]]
+                validated=canonical_legs[id(leg)]
+                c.execute("""INSERT INTO parlay_legs(parlay_id,leg_index,fixture_id,sport,league_code,home,away,league_name,kickoff,market,selection,handicap,line,odds)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(parlay_id,index,internal_ids[id(leg)],leg.sport,leg.league_code if leg.sport=="basketball" else None,
+                    row["home"],row["away"],row.get("league_name"),row.get("kickoff"),validated["market"],validated["selection"],validated.get("handicap"),validated.get("line"),str(validated["odds"])))
     result=sync_parlay(parlay_id)
     if result:result["resumed_fixture_ids"]=resumed
     return result

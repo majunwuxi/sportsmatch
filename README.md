@@ -12,10 +12,11 @@ The dashboard is published as an owner-private ChatGPT Site. Its always-on sched
 - Search NBA and WNBA games by date and team in English or Chinese through BallDontLie
 - Default basketball monitoring's first check to 2 hours 30 minutes after kickoff
 - Settle the four single-game JC Basketball markets: result, handicap result, over/under total, and winning margin; use the final score including overtime
+- Create 2–8 game basketball parlays with system-pass combinations, mixed basketball markets, per-leg ticket lines/SP, and shared NBA/WNBA score monitors; football and basketball legs cannot be mixed on one ticket
 - Maintain all 30 NBA and 15 current WNBA teams with Chinese names and official CDN logos
 - Request and store fixture kickoff timestamps in `Asia/Shanghai`; display every kickoff with an explicit Beijing-time label
 - Create monitoring tasks with start time (Asia/Shanghai) and interval; multiple matches supported
-- Create standalone pass-ticket monitors by adding match legs from fixture search or parsing ticket/OCR text into a review table; bind every leg to an API-Football fixture before creating it
+- Create standalone pass-ticket monitors by adding match legs from fixture search or parsing ticket/OCR text into a review table; bind every leg to an API-Football or BallDontLie fixture before creating it
 - Reuse any existing match watcher for parlay legs, regardless of whether that watcher tracks correct score, result, handicap, total goals, or half/full time; missing fixtures receive one score-only watcher
 - Set pass type and multiples, calculate system-pass combinations, stake, and per-combination payout; settle each winning combination separately and report combined return/net profit
 - Require manual confirmation before voiding an invalid or abandoned fixture; Telegram reports changes when the ticket settles
@@ -29,7 +30,7 @@ The dashboard is published as an owner-private ChatGPT Site. Its always-on sched
 - Keep BallDontLie requests at least 12.5 seconds apart to stay within its documented Free-plan rate limit
 - API daily call budget guard and graceful error recording
 
-Basketball ticket JSON records the ticket's actual SP and, for handicap/total markets, its signed home adjustment or points line. Basketball parlays are not supported. See `.env.example`, `app.py` and `DEPLOY.md`.
+Basketball ticket JSON records the ticket's actual SP and, for handicap/total markets, its signed home adjustment or points line. Basketball pass tickets reuse existing match monitors when possible and default new match monitors to kickoff plus 150 minutes. See `.env.example`, `app.py` and `DEPLOY.md`.
 
 ChatGPT Sites can be evaluated for the frontend, but this Python background scheduler requires an always-on runtime. See `SITES.md`.
 
