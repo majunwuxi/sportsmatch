@@ -294,8 +294,10 @@
       throw Error("投注含‘胜其它/负其它’：请先补全截图中全部带SP的精确比分清单，并勾选清单确认。");
     }
     const total = tickets.reduce((sum, ticket) => sum + ticket.stake, 0);
+    const isBasketball = tickets.some((ticket) => String(ticket.market || "").startsWith("basketball_"));
     return {
       schema_version: 2,
+      sport: selected?.sport || (isBasketball ? "basketball" : "football"),
       fixture_id: selected?.id ?? null,
       home: selected?.home ?? null,
       away: selected?.away ?? null,
@@ -303,8 +305,10 @@
       kickoff: selected?.kickoff ?? null,
       screenshot_ocr: "browser_local_reviewed",
       budget: total,
-      listed_scores: listedScoreResult.scores,
-      listed_scores_verified: $("verifyListedScores").checked,
+      ...(!isBasketball ? {
+        listed_scores: listedScoreResult.scores,
+        listed_scores_verified: $("verifyListedScores").checked,
+      } : {}),
       tickets,
     };
   }
