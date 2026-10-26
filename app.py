@@ -38,6 +38,8 @@ MARKETS={"correct_score":"比分","match_result":"胜平负","handicap":"让球�
     "basketball_result":"竞彩篮球胜负","basketball_handicap":"竞彩篮球让分胜负",
     "basketball_total":"竞彩篮球大小分","basketball_margin":"竞彩篮球胜分差"}
 BASKETBALL_MARKETS={"basketball_result","basketball_handicap","basketball_total","basketball_margin"}
+BASKETBALL_RESULT_SELECTIONS={"主胜","客胜"}
+BASKETBALL_RESULT_ALIASES={"胜":"主胜","主胜":"主胜","主队胜":"主胜","客负":"主胜","负":"客胜","客胜":"客胜","客队胜":"客胜","主负":"客胜"}
 RESULTS={"胜","平","负"}
 FOOTBALL_RESULT_SELECTIONS={"主胜","平","客胜"}
 FOOTBALL_RESULT_ALIASES={"胜":"主胜","负":"客胜","主队胜":"主胜","客队胜":"客胜","平局":"平","主负":"客胜","客负":"主胜"}
@@ -331,6 +333,10 @@ def normalize_basketball_margin_selection(value):
     band="26+" if match.group(2).startswith("26") else match.group(2)
     return side+band+"分"
 
+def normalize_basketball_result_selection(value):
+    raw=str(value or "").strip().replace(" ","").replace("　","")
+    return BASKETBALL_RESULT_ALIASES.get(raw,raw)
+
 def is_half_point_line(value):
     try:return abs(Decimal(str(value))*2)%Decimal(2)==Decimal(1)
     except Exception:return False
@@ -347,13 +353,13 @@ def ticket_matches(ticket,home,away,half_home=None,half_away=None,listed_scores=
         if half_home is None or half_away is None: return None
         return selection==score_result(half_home,half_away)+score_result(home,away)
     if market=="basketball_result":
-        result="胜" if home>away else "负" if home<away else None
-        return selection==result if result else None
+        result="主胜" if home>away else "客胜" if home<away else None
+        return normalize_basketball_result_selection(selection)==result if result else None
     if market=="basketball_handicap":
         adjusted=Decimal(str(home))+Decimal(str(ticket["handicap"]))
         opponent=Decimal(str(away))
-        result="胜" if adjusted>opponent else "负" if adjusted<opponent else None
-        return selection==result if result else None
+        result="主胜" if adjusted>opponent else "客胜" if adjusted<opponent else None
+        return normalize_basketball_result_selection(selection)==result if result else None
     if market=="basketball_total":
         total=Decimal(str(home+away));line=Decimal(str(ticket["line"]))
         result="大" if total>line else "小" if total<line else None
@@ -636,10 +642,10 @@ def validate_tickets(items,sport="football"):
     for t in items:
         allowed=BASKETBALL_MARKETS if sport=="basketball" else soccer_markets
         if t.market not in allowed: raise HTTPException(422,f"Unsupported {sport} market: {t.market}")
-        selection=normalize_football_result_selection(t.selection) if sport=="football" and t.market in {"match_result","handicap"} else t.selection
+        selection=normalize_football_result_selection(t.selection) if sport=="football" and t.market in {"match_result","handicap"} else normalize_basketball_result_selection(t.selection) if sport=="basketball" and t.market in {"basketball_result","basketball_handicap"} else t.selection
         if sport=="basketball":
-            if t.market=="basketball_result":valid=t.selection in {"胜","负"} and t.handicap is None and t.line is None
-            elif t.market=="basketball_handicap":valid=t.selection in {"胜","负"} and t.handicap is not None and is_half_point_line(t.handicap) and t.line is None
+            if t.market=="basketball_result":valid=selection in BASKETBALL_RESULT_SELECTIONS and t.handicap is None and t.line is None
+            elif t.market=="basketball_handicap":valid=selection in BASKETBALL_RESULT_SELECTIONS and t.handicap is not None and is_half_point_line(t.handicap) and t.line is None
             elif t.market=="basketball_total":valid=t.selection in {"大","小"} and t.line is not None and is_half_point_line(t.line) and t.handicap is None
             else:valid=normalize_basketball_margin_selection(t.selection) is not None and t.handicap is None and t.line is None
         else:
@@ -653,6 +659,7 @@ def validate_tickets(items,sport="football"):
     for t in items:
         row=t.model_dump(exclude_none=True)
         if sport=="basketball" and t.market=="basketball_margin":row["selection"]=normalize_basketball_margin_selection(t.selection)
+        if sport=="basketball" and t.market in {"basketball_result","basketball_handicap"}:row["selection"]=normalize_basketball_result_selection(t.selection)
         if sport=="football" and t.market in {"match_result","handicap"}:row["selection"]=normalize_football_result_selection(t.selection)
         if sport=="football" and t.market=="handicap":row["handicap"]=int(t.handicap)
         result.append(row)

@@ -20,7 +20,7 @@
   const resultOptions = new Set(["主胜", "平", "客胜", "主队胜", "客队胜", "主负", "客负", "胜", "负"]);
   const halfFullOptions = new Set(["胜胜", "胜平", "胜负", "平胜", "平平", "平负", "负胜", "负平", "负负"]);
   const totalGoalOptions = new Set(["0", "1", "2", "3", "4", "5", "6", "7+"]);
-  const basketballResultOptions = new Set(["胜", "负"]);
+  const basketballResultOptions = new Set(["主胜", "客胜"]);
   const basketballTotalOptions = new Set(["大", "小"]);
   const basketballMarginBands = ["1-5", "6-10", "11-15", "16-20", "21-25", "26+"];
   const basketballMarginOptions = new Set(basketballMarginBands.flatMap((band) => ["主胜" + band + "分", "客胜" + band + "分"]));
@@ -43,6 +43,13 @@
   function normalizeFootballResultSelection(value) {
     const raw = normalize(value);
     if (["平","平局"].includes(raw)) return "平";
+    if (["客胜","客队胜","负","主负"].includes(raw)) return "客胜";
+    if (["主胜","主队胜","胜","客负"].includes(raw)) return "主胜";
+    return raw;
+  }
+
+  function normalizeBasketballResultSelection(value) {
+    const raw = normalize(value);
     if (["客胜","客队胜","负","主负"].includes(raw)) return "客胜";
     if (["主胜","主队胜","胜","客负"].includes(raw)) return "主胜";
     return raw;
@@ -260,13 +267,11 @@
     if (section === "basketball_total" && basketballTotalOptions.has(text)) {
       return { market: section, selection: text, handicap: null, line: inferBasketballLine(label, words, height) };
     }
-    if (section === "basketball_result" && ["胜", "负", "主胜", "客胜", "主负", "客负"].includes(text)) {
-      const selection = ["主胜", "客负"].includes(text) ? "胜" : ["客胜", "主负"].includes(text) ? "负" : text;
-      return { market: section, selection, handicap: null, line: null };
+    if (section === "basketball_result" && ["胜", "负", "主胜", "客胜", "主队胜", "客队胜", "主负", "客负"].includes(text)) {
+      return { market: section, selection: normalizeBasketballResultSelection(text), handicap: null, line: null };
     }
-    if (section === "basketball_handicap" && ["胜", "负", "主胜", "客胜", "主负", "客负"].includes(text)) {
-      const selection = ["主胜", "客负"].includes(text) ? "胜" : ["客胜", "主负"].includes(text) ? "负" : text;
-      return { market: section, selection, handicap: inferBasketballHandicap(label, words, height), line: null };
+    if (section === "basketball_handicap" && ["胜", "负", "主胜", "客胜", "主队胜", "客队胜", "主负", "客负"].includes(text)) {
+      return { market: section, selection: normalizeBasketballResultSelection(text), handicap: inferBasketballHandicap(label, words, height), line: null };
     }
     if (scoreOptions.has(text)) return { market: "correct_score", selection: text, handicap: null };
     if (halfFullOptions.has(text)) return { market: "half_full", selection: text, handicap: null };
@@ -365,7 +370,9 @@
   function validatePick(pick) {
     const market = pick?.market;
     const selection = market === "match_result" || market === "handicap"
-      ? normalizeFootballResultSelection(pick?.selection) : normalize(pick?.selection);
+      ? normalizeFootballResultSelection(pick?.selection)
+      : market === "basketball_result" || market === "basketball_handicap"
+        ? normalizeBasketballResultSelection(pick?.selection) : normalize(pick?.selection);
     const allowed = market === "correct_score" ? scoreOptions
       : market === "match_result" || market === "handicap" ? resultOptions
       : market === "total_goals" ? totalGoalOptions
@@ -439,14 +446,14 @@
         () => ({ handicap: null, line: null }));
     } else if (market === "basketball_result") {
       addMatches(/[（(]?(主胜|客胜|主负|客负|胜|负)[）)]?/g,
-        (raw) => ["主胜", "客负"].includes(raw) ? "胜" : ["客胜", "主负"].includes(raw) ? "负" : raw,
+        (raw) => normalizeBasketballResultSelection(raw),
         () => ({ handicap: null, line: null }));
     } else if (market === "basketball_handicap") {
       const handicapMatch = text.match(/(?:主队)?(?:让分|让分数|让分值|主让分)[:：]?([+-]?\d{1,2}\.\d)/)
         || text.match(/主让[:：]?(\d{1,2}\.\d)/);
       const handicap = handicapMatch ? Number(handicapMatch[1]) * (handicapMatch[0].includes("主让") && !/[+-]/.test(handicapMatch[1]) ? -1 : 1) : null;
       addMatches(/[（(]?(主胜|客胜|主负|客负|胜|负)[）)]?/g,
-        (raw) => ["主胜", "客负"].includes(raw) ? "胜" : ["客胜", "主负"].includes(raw) ? "负" : raw,
+        (raw) => normalizeBasketballResultSelection(raw),
         () => ({ handicap, line: null }));
     } else if (market === "basketball_total") {
       addMatches(/[（(]?(大|小)(?:于|分)?(\d{2,3}(?:\.\d)?)[）)]?/g,
@@ -1015,5 +1022,5 @@
     return data;
   }
 
-  root.MatchMonitorOCR = { parse, parseSelectedRegions, parseScoreGridCells, parseBasketballTicket, preferScoreOdds, preprocessScoreOddsPixels, inferScoreGrid, scoreGridRows, scoreSelectedCrop, marketAt, validatePick, normalize, normalizeFootballResultSelection, listedScoresFromRows, parseListedScores, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels, paddleWordsFromResult };
+  root.MatchMonitorOCR = { parse, parseSelectedRegions, parseScoreGridCells, parseBasketballTicket, preferScoreOdds, preprocessScoreOddsPixels, inferScoreGrid, scoreGridRows, scoreSelectedCrop, marketAt, validatePick, normalize, normalizeFootballResultSelection, normalizeBasketballResultSelection, listedScoresFromRows, parseListedScores, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels, paddleWordsFromResult };
 })(globalThis);

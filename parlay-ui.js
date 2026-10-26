@@ -7,8 +7,8 @@
   const MARKETS = core.getMarkets();
   const FOOTBALL_MARKETS=Object.keys(DRAFT_OPTIONS);
   const BASKETBALL_OPTIONS={
-    basketball_result:["胜","负"],
-    basketball_handicap:["胜","负"],
+    basketball_result:["主胜","客胜"],
+    basketball_handicap:["主胜","客胜"],
     basketball_total:["大","小"],
     basketball_margin:["主胜1-5分","主胜6-10分","主胜11-15分","主胜16-20分","主胜21-25分","主胜26+分","客胜1-5分","客胜6-10分","客胜11-15分","客胜16-20分","客胜21-25分","客胜26+分"]
   };
@@ -29,13 +29,17 @@
 
   const money = value => "¥" + Number(value || 0).toFixed(2);
   const roundTicket = value => Math.round(value * 100 + 1e-8) / 100;
-  const footballSelectionLabel = (market,selection) => market!=="match_result"&&market!=="handicap"?String(selection||"")
-    :["胜","主队胜"].includes(selection)?"主胜":["负","客队胜","主负"].includes(selection)?"客胜":String(selection||"");
-  const pickSelectionLabel = pick => footballSelectionLabel(pick.market,pick.selection);
-  const apiFootballSelection = (leg,pick) => {
-    if ((leg.sport||"football")==="basketball" || !["match_result","handicap"].includes(pick.market)) return pick.selection;
-    if (["主胜","主队胜","客负"].includes(pick.selection)) return "胜";
-    if (["客胜","客队胜","主负"].includes(pick.selection)) return "负";
+  const resultSelectionLabel = (market,selection) => {
+    if (!["match_result","handicap","basketball_result","basketball_handicap"].includes(market)) return String(selection||"");
+    if (["胜","主胜","主队胜","客负"].includes(selection)) return "主胜";
+    if (["负","客胜","客队胜","主负"].includes(selection)) return "客胜";
+    return selection==="平局"?"平":String(selection||"");
+  };
+  const pickSelectionLabel = pick => resultSelectionLabel(pick.market,pick.selection);
+  const apiSelection = (leg,pick) => {
+    if (!["match_result","handicap","basketball_result","basketball_handicap"].includes(pick.market)) return pick.selection;
+    if (["主胜","主队胜","胜","客负"].includes(pick.selection)) return "胜";
+    if (["客胜","客队胜","负","主负"].includes(pick.selection)) return "负";
     return pick.selection==="平局"?"平":pick.selection;
   };
   function ticketPicks(leg) { return Array.isArray(leg.selections)&&leg.selections.length?leg.selections:[leg]; }
@@ -323,7 +327,7 @@
       if(comboCount>5000)throw Error("该票展开后的注数超过5000注，当前无法安全创建监测。");
       if(total&&Math.abs(total-expected)>0.009)throw Error(`票面总金额为 ${money(total)}，按当前方式和倍数应为 ${money(expected)}。`);
       submitting=true;updateTotals();$("parlayError").textContent="正在创建过关监测…";
-      const result=await core.req("/api/parlays",{method:"POST",body:JSON.stringify({pass_type:$("parlayPassType").value,multiples,unit_stake:2,declared_total:total||expected,declared_payout:Number($("parlayDeclaredPayout").value)||null,legs:legs.map(leg=>{const picks=legSelections(leg).map(pick=>({market:pick.market,selection:apiFootballSelection(leg,pick),odds:Number(pick.odds),...(["handicap","basketball_handicap"].includes(pick.market)?{handicap:Number(pick.handicap)}:{}),...(pick.market==="basketball_total"?{line:Number(pick.line)}:{})})),first=picks[0];return{fixture_id:leg.fixture_id,sport:leg.sport||"football",...(leg.sport==="basketball"?{league_code:leg.league_code||"nba"}:{}),...first,selections:picks}})})});
+      const result=await core.req("/api/parlays",{method:"POST",body:JSON.stringify({pass_type:$("parlayPassType").value,multiples,unit_stake:2,declared_total:total||expected,declared_payout:Number($("parlayDeclaredPayout").value)||null,legs:legs.map(leg=>{const picks=legSelections(leg).map(pick=>({market:pick.market,selection:apiSelection(leg,pick),odds:Number(pick.odds),...(["handicap","basketball_handicap"].includes(pick.market)?{handicap:Number(pick.handicap)}:{}),...(pick.market==="basketball_total"?{line:Number(pick.line)}:{})})),first=picks[0];return{fixture_id:leg.fixture_id,sport:leg.sport||"football",...(leg.sport==="basketball"?{league_code:leg.league_code||"nba"}:{}),...first,selections:picks}})})});
       legs=[];bindingIndex=null;$("parlayError").textContent=result.resumed_fixture_ids?.length?`过关票已创建；已恢复 ${result.resumed_fixture_ids.length} 个共用比赛监测任务。`:"过关票已创建，赛果将由对应比赛监测任务自动更新。";renderLegs();await loadParlays();
     }catch(error){$("parlayError").textContent=error.message||String(error)}finally{submitting=false;updateTotals()}
   });
