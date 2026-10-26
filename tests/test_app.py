@@ -51,6 +51,14 @@ def test_basketball_handicap_applies_signed_home_adjustment_and_total_return():
     assert m.ticket_matches({'market':'basketball_handicap','selection':'客胜','handicap':-4.5},110,106) is True
     assert m.ticket_matches({'market':'basketball_handicap','selection':'主胜','handicap':3.5},100,102) is True
 
+def test_basketball_total_and_margin_use_final_score_and_integer_margin():
+    assert m.ticket_matches({'market':'basketball_total','selection':'大','line':205.5},110,102) is True
+    assert m.ticket_matches({'market':'basketball_total','selection':'小','line':215.5},110,102) is True
+    assert m.ticket_matches({'market':'basketball_total','selection':'小','line':205.5},110,102) is False
+    assert m.ticket_matches({'market':'basketball_margin','selection':'主胜6-10分'},110,102) is True
+    assert m.ticket_matches({'market':'basketball_margin','selection':'客胜11-15分'},100,111) is True
+    assert m.ticket_matches({'market':'basketball_margin','selection':'主胜1-5分'},100,100) is None
+
 def test_basketball_does_not_accept_draw_selection():
     with pytest.raises(m.HTTPException) as error:
         m.validate_tickets([m.Ticket(market='basketball_result',selection='平',stake=2,odds=3)],sport='basketball')
@@ -510,6 +518,29 @@ def test_extra_time_90_minutes(client,monkeypatch):
 def test_cancel_review(client,monkeypatch):
     t=task(client,monkeypatch);monkeypatch.setattr(m,'api',lambda *a:[fixture('CANC')]);m.tick(t)
     with m.conn() as c:assert c.execute('SELECT status FROM tasks').fetchone()[0]=='review_required'
+
+@pytest.mark.parametrize('league_code,game_id,home,away,scores,expected_score', [
+    ('nba',12345,'Los Angeles Lakers','Brooklyn Nets',{'home_team_score':112,'visitor_team_score':108},'112:108'),
+    ('wnba',23456,'Atlanta Dream','Chicago Sky',{'home_score':89,'away_score':85},'89:85'),
+])
+def test_nba_and_wnba_final_scores_settle_home_win(client,monkeypatch,league_code,game_id,home,away,scores,expected_score):
+    created=task(client,monkeypatch)
+    fixture_id=m.BALLDONTLIE_GAME_ID_BASE[league_code]+game_id
+    with m.conn() as c:
+        c.execute("UPDATE tasks SET fixture_id=?,sport='basketball',league_code=?,provider_game_id=?,home=?,away=?,ticket_json=? WHERE id=?",
+            (fixture_id,league_code,str(game_id),home,away,m.json.dumps([{'market':'basketball_result','selection':'主胜','stake':2,'odds':1.8}]),created['id']))
+        basketball_task=dict(c.execute('SELECT * FROM tasks WHERE id=?',(created['id'],)).fetchone())
+    game={'id':game_id,'home_team':{'full_name':home},'visitor_team':{'full_name':away},'status':'Final','status_state':'final',
+        'datetime':'2026-10-25T19:00:00Z',**scores}
+    monkeypatch.setattr(m,'balldontlie_api',lambda *args,**kwargs:{'data':game})
+    monkeypatch.setattr(m,'notify',lambda *_:None)
+    monkeypatch.setattr(m,'sync_parlays_for_fixture',lambda *_:None)
+    m._tick_basketball(basketball_task)
+    settled=client.get('/api/tasks',auth=('test','test-password')).json()[0]
+    assert settled['sport']=='basketball' and settled['status']=='finished'
+    assert settled['settlement_score']==expected_score
+    assert settled['settlement']['tickets'][0]['won'] is True
+    assert settled['settlement']['payout']==3.6
 
 def test_tied_final_basketball_score_requires_manual_review(client,monkeypatch):
     created=task(client,monkeypatch)
