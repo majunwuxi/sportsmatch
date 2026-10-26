@@ -764,7 +764,8 @@ def evaluate_parlay(parlay,legs,tasks_by_fixture):
         status_text={"pending":"等待赛果","won":"至少一项命中","lost":"全部未命中","void":"已确认无效","review_required":"待人工核验"}.get(state,state)
         if state=="pending" and task and task.get("status") in {"paused","stopped"}:status_text="监测已暂停"
         leg_results.append({"id":int(leg["id"]),"leg_index":int(leg["leg_index"]),"fixture_id":int(leg["fixture_id"]),"home":leg["home"],"away":leg["away"],
-            "sport":leg.get("sport") or "football","league_code":leg.get("league_code"),"league_name":leg.get("league_name"),"kickoff":leg.get("kickoff"),
+            "sport":leg.get("sport") or "football","league_code":leg.get("league_code"),
+            "league_name":leg.get("league_name") or (task.get("league_name") if task else None),"kickoff":leg.get("kickoff"),
             "home_cn":BASKETBALL_TEAM_NAMES_ZH.get(leg["home"],"") if leg.get("sport")=="basketball" else "",
             "away_cn":BASKETBALL_TEAM_NAMES_ZH.get(leg["away"],"") if leg.get("sport")=="basketball" else "",
             "monitor_start_at":task.get("start_at") if task else None,"market":first["market"],"market_label":first["market_label"],
