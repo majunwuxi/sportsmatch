@@ -65,6 +65,11 @@
   function validBasketballLine(value) { const n=Number(value);return Number.isFinite(n)&&Math.abs(n*2-Math.round(n*2))<1e-8&&Math.abs(Math.round(n*2))%2===1; }
   function defaultMarket(sport) { return sport==="basketball"?"basketball_result":"match_result"; }
   function legTitle(leg,index) { return `第${index+1}腿${leg.home||leg.away?` · ${leg.home||"待绑定主队"} vs ${leg.away||"待绑定客队"}`:" · 尚未绑定比赛"}`; }
+  function closeFixtureSearch() {
+    bindingIndex=null;
+    document.body.classList.remove("parlay-binding-active");
+    $("closeParlayFixtureSearch").hidden=true;
+  }
   function legSelections(leg) {
     if (!Array.isArray(leg.selections) || !leg.selections.length) {
       const market=leg.market||defaultMarket(leg.sport||"football");
@@ -136,10 +141,10 @@
       const title=document.createElement("strong");title.textContent=legTitle(leg,index);
       const actions=document.createElement("div");actions.className="actions";
       const bind=document.createElement("button");bind.type="button";bind.className="subtle";bind.textContent=leg.fixture_id?"重新绑定比赛":"搜索并绑定比赛";bind.onclick=()=>{
-        bindingIndex=index;$("sport").value=leg.sport||"football";if(leg.sport==="basketball")$("basketballLeague").value=leg.league_code||"nba";core.updateSportInputs?.();const search=$("search");search.value=leg.home||"";$("parlayImportStatus").textContent=`正在为第${index+1}腿查找比赛；选择日期并搜索后，点击对应比赛的“绑定到第${index+1}腿”。`;
+        bindingIndex=index;document.body.classList.add("parlay-binding-active");$("closeParlayFixtureSearch").hidden=false;$("sport").value=leg.sport||"football";if(leg.sport==="basketball")$("basketballLeague").value=leg.league_code||"nba";core.updateSportInputs?.();const search=$("search");search.value=leg.home||"";$("fixtures").replaceChildren();$("parlayImportStatus").textContent=`正在为第${index+1}腿查找比赛。确认日期和球队名称后，点击“搜索比赛”，再点对应结果中的“绑定到第${index+1}腿”。`;
         $("fixtureSearch").scrollIntoView({behavior:"smooth",block:"start"});search.focus();
       };
-      const remove=document.createElement("button");remove.type="button";remove.className="danger";remove.textContent="删除本腿";remove.onclick=()=>{legs.splice(index,1);if(bindingIndex===index)bindingIndex=null;else if(bindingIndex>index)bindingIndex--;renderLegs()};
+      const remove=document.createElement("button");remove.type="button";remove.className="danger";remove.textContent="删除本腿";remove.onclick=()=>{legs.splice(index,1);if(bindingIndex===index)closeFixtureSearch();else if(bindingIndex>index)bindingIndex--;renderLegs()};
       actions.append(bind,remove);head.append(title,actions);box.append(head);
       const matchup=document.createElement("p");matchup.className="notice parlay-match";matchup.textContent=leg.fixture_id?`${leg.home} vs ${leg.away} · ${leg.league_name||"赛事"} · 北京时间 ${core.formatKickoffBeijing(leg.kickoff)}`:"请通过上方比赛搜索绑定真实比赛，文字识别不会自动猜测 fixture。";box.append(matchup);
       const sport=leg.sport||"football",pickRows=legSelections(leg),pickHost=document.createElement("div");pickHost.className="parlay-pick-list";
@@ -173,7 +178,7 @@
       const leg=legs[targetIndex],oldSport=leg.sport||"football";Object.assign(leg,fixture);
       if(oldSport!==sport){const market=defaultMarket(sport);leg.selections=[{market,selection:optionsFor(market)[0]||"胜",odds:"",handicap:null,line:null}];syncLegacySelection(leg)}
     }else {const market=defaultMarket(sport);legs.push({...fixture,selections:[{market,selection:optionsFor(market)[0]||"胜",odds:"",handicap:null,line:null}]})}
-    bindingIndex=null;$("parlayError").textContent="";$("parlayImportStatus").textContent=`已绑定：${item.home} vs ${item.away}。请核对玩法、投注项和SP。`;renderLegs();
+    closeFixtureSearch();$("parlayError").textContent="";$("parlayImportStatus").textContent=`已绑定：${item.home} vs ${item.away}。请核对玩法、投注项和SP。`;renderLegs();
   }
 
   function importText() {
@@ -184,7 +189,7 @@
     if(parsed.multiples)$("parlayMultiples").value=String(parsed.multiples);
     if(parsed.total!==null)$("parlayDeclaredTotal").value=String(parsed.total);
     if(parsed.payout!==null)$("parlayDeclaredPayout").value=String(parsed.payout);
-    legs=parsed.legs.map(leg=>({...leg,fixture_id:null,sport:leg.sport||($("sport").value==="basketball"?"basketball":"football"),league_code:leg.league_code||($("basketballLeague").value||"nba"),selections:leg.selections||[{market:leg.market,selection:leg.selection,odds:leg.odds??"",handicap:leg.handicap??null,line:leg.line??null}]}));bindingIndex=null;$("parlayError").textContent="";
+    legs=parsed.legs.map(leg=>({...leg,fixture_id:null,sport:leg.sport||($("sport").value==="basketball"?"basketball":"football"),league_code:leg.league_code||($("basketballLeague").value||"nba"),selections:leg.selections||[{market:leg.market,selection:leg.selection,odds:leg.odds??"",handicap:leg.handicap??null,line:leg.line??null}]}));closeFixtureSearch();$("parlayError").textContent="";
     if(legs.length){$("sport").value=legs[0].sport||"football";if(legs[0].sport==="basketball")$("basketballLeague").value=legs[0].league_code||"nba";core.updateSportInputs?.()}
     renderLegs();
     $("parlayImportStatus").textContent=parsed.warnings.length?parsed.warnings.join(" "): `识别到 ${legs.length} 条比赛腿。请逐条搜索并绑定实际比赛，再核对玩法和SP。`;
@@ -196,7 +201,7 @@
     if(Number.isFinite(receipt.total))$("parlayDeclaredTotal").value=String(receipt.total);
     if(Array.isArray(receipt.payoutRange)&&Number.isFinite(receipt.payoutRange[1]))$("parlayDeclaredPayout").value=String(receipt.payoutRange[1]);
     legs=(receipt.legs||[]).map(leg=>({...leg,fixture_id:null,selections:leg.selections||[{market:leg.market,selection:leg.selection,odds:leg.odds??"",handicap:leg.handicap??null,line:leg.line??null}]}));
-    bindingIndex=null;$("parlayError").textContent="";renderLegs();
+    closeFixtureSearch();$("parlayError").textContent="";renderLegs();
     const payout=receipt.payoutRange?`；票面预计返奖 ${money(receipt.payoutRange[0])}–${money(receipt.payoutRange[1])}`:"";
     const status=`识别到${receipt.sport==="basketball"?"竞彩篮球":"竞彩足球"}过关票：${legs.length}场、${receipt.betCount||"?"}注、${receipt.multiples||1}倍${payout}。请核对每场玩法和选项，并逐场搜索绑定真实比赛。`;
     $("parlayImportStatus").textContent=[status,...(receipt.warnings||[])].join(" ");
@@ -325,7 +330,9 @@
   }
 
   $("parseParlayText").addEventListener("click",importText);
-  $("clearParlayText").addEventListener("click",()=>{$("parlayText").value="";legs=[];bindingIndex=null;$("parlayDeclaredTotal").value="";$("parlayDeclaredPayout").value="";$("parlayMultiples").value="1";$("parlayPassType").value="2串1";$("parlayImportStatus").textContent="已清空票面文字和待核对比赛腿。";renderLegs()});
+  $("closeParlayFixtureSearch").addEventListener("click",()=>{closeFixtureSearch();$("parlayImportStatus").textContent="已收起比赛搜索；票面和投注项仍保留。";$("parlayPanel").scrollIntoView({behavior:"smooth",block:"start"})});
+  $("singleModeButton").addEventListener("click",closeFixtureSearch);
+  $("clearParlayText").addEventListener("click",()=>{$("parlayText").value="";legs=[];closeFixtureSearch();$("parlayDeclaredTotal").value="";$("parlayDeclaredPayout").value="";$("parlayMultiples").value="1";$("parlayPassType").value="2串1";$("parlayImportStatus").textContent="已清空票面文字和待核对比赛腿。";renderLegs()});
   $("addParlayLeg").addEventListener("click",addBlankLeg);
   $("createParlay").addEventListener("click",async()=>{
     const pass=splitPass($("parlayPassType").value),multiples=Number($("parlayMultiples").value),total=Number($("parlayDeclaredTotal").value||0);
@@ -347,6 +354,6 @@
   $("refreshParlays").addEventListener("click",loadParlays);
   for(const id of ["parlayPassType","parlayMultiples","parlayDeclaredTotal","parlayDeclaredPayout"])$(id).addEventListener("input",updateTotals);
   for(const id of ["parlayPassType","parlayMultiples","parlayDeclaredTotal","parlayDeclaredPayout"])$(id).addEventListener("change",updateTotals);
-  root.MatchMonitorParlayUI={addFixture,loadParlays,importReceipt,bindLeg(index){bindingIndex=index},get bindLegIndex(){return bindingIndex}};
+  root.MatchMonitorParlayUI={addFixture,loadParlays,importReceipt,bindLeg(index){bindingIndex=index},cancelBinding:closeFixtureSearch,get bindLegIndex(){return bindingIndex}};
   renderLegs();loadParlays();setInterval(loadParlays,30000);
 })(globalThis);
