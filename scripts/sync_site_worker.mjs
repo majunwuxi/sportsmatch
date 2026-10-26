@@ -73,7 +73,7 @@ rest = rest.replace(/ \/\/ BRAND_LOGO_ROUTE_BEGIN[\s\S]*? \/\/ BRAND_LOGO_ROUTE_
 rest = rest.replace(/ if\(url\.pathname==='\/brand-logo\.webp'\)\{\n[\s\S]*?\n \}\n/g, '');
 rest = rest.replace(/ \/\/ TEAM_LOGO_PROXY_ROUTE_BEGIN[\s\S]*? \/\/ TEAM_LOGO_PROXY_ROUTE_END\n/g, '');
 rest = rest.replace(routeMarker, routes);
-rest = rest.replace("img-src 'self' blob: data:", "img-src 'self' https://cdn.nba.com https://cdn.wnba.com blob: data:");
+rest = rest.replace(/img-src 'self'[^;]+/, "img-src 'self' blob: data: https://cdn.nba.com https://cdn.wnba.com");
 const output = `${prefix}const HTML=${JSON.stringify(html)};\nconst OCR_PARSER=${JSON.stringify(parser)};\nconst OCR_UI=${JSON.stringify(ui)};\nconst PARLAY_PARSER=${JSON.stringify(parlayParser)};\nconst PARLAY_UI=${JSON.stringify(parlayUi)};\nconst TEAM_MAP_JS=${JSON.stringify(teamMap)};\nconst BASKETBALL_TEAM_JS=${JSON.stringify(basketballTeams)};\nconst BRAND_LOGO_B64=${JSON.stringify(logo.toString('base64'))};\nconst TEAM_DIRECTORY=JSON.parse(TEAM_MAP_JS.slice("globalThis.MatchMonitorTeamDirectory=".length).trim().replace(/;$/, ""));\nfunction hasRegisteredTeamLogo(entry){if(typeof entry?.logo!=="string")return false;try{const logo=new URL(entry.logo);return logo.protocol==="https:"&&Boolean(logo.hostname)&&!logo.username&&!logo.password&&!logo.port}catch{return false}}\n${rest}`;
 await writeFile(workerPath, output);
 console.log('Synced dashboard HTML, OCR assets, and team directory into the Sites Worker.');

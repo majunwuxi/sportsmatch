@@ -71,6 +71,7 @@
       market: pick.market,
       selection: pick.selection,
       handicap: pick.handicap,
+      line: pick.line,
       odds: pick.odds,
     });
     if (!checked.ok) return checked;
@@ -132,17 +133,27 @@
       selectionCell.append(selection);
 
       const handicapCell = document.createElement("td");
-      if (pick.market === "handicap") {
+      if (["handicap", "basketball_handicap"].includes(pick.market)) {
         const handicap = document.createElement("input");
         handicap.type = "number";
-        handicap.min = "-9";
-        handicap.max = "9";
-        handicap.step = "1";
+        handicap.min = pick.market === "handicap" ? "-9" : "-50";
+        handicap.max = pick.market === "handicap" ? "9" : "50";
+        handicap.step = pick.market === "handicap" ? "1" : "0.5";
         handicap.value = pick.handicap ?? "";
-        handicap.placeholder = "让球数";
+        handicap.placeholder = pick.market === "handicap" ? "让球数" : "让分值";
         handicap.setAttribute("aria-label", "第" + (index + 1) + "项主队让球数");
         handicap.oninput = () => { pick.handicap = handicap.value === "" ? null : Number(handicap.value); clearOcrConfirmation(); updateOcrRowState(tr, pick); };
         handicapCell.append(handicap);
+      } else if (pick.market === "basketball_total") {
+        const line = document.createElement("input");
+        line.type = "number";
+        line.min = "0";
+        line.step = "0.5";
+        line.value = pick.line ?? "";
+        line.placeholder = "总分线";
+        line.setAttribute("aria-label", "第" + (index + 1) + "项竞彩篮球大小分总分线");
+        line.oninput = () => { pick.line = line.value === "" ? null : Number(line.value); clearOcrConfirmation(); updateOcrRowState(tr, pick); };
+        handicapCell.append(line);
       } else handicapCell.textContent = "—";
 
       const oddsCell = document.createElement("td");
@@ -177,7 +188,7 @@
       const confidenceCell = document.createElement("td");
       confidenceCell.textContent = pick.unrecognized
         ? "已按选区建行 · 请手动校对"
-        : (pick.highlighted ? "选区内容识别 · " : "待勾选 · ") + "OCR " + pick.confidence + "%";
+        : (pick.source === "basketball_ticket" ? "篮球纸质票识别 · " : pick.highlighted ? "选区内容识别 · " : "待勾选 · ") + "OCR " + pick.confidence + "%";
       if (pick.needsReview) confidenceCell.classList.add("bad");
       tr.append(checkCell, marketCell, selectionCell, handicapCell, oddsCell, stakeCell, resultCell, confidenceCell);
       body.append(tr);
@@ -272,7 +283,8 @@
       selection: pick.selection,
       stake: Number(pick.stake),
       odds: Number(pick.odds),
-      ...(pick.market === "handicap" ? { handicap: Number(pick.handicap) } : {}),
+      ...(["handicap", "basketball_handicap"].includes(pick.market) ? { handicap: Number(pick.handicap) } : {}),
+      ...(pick.market === "basketball_total" ? { line: Number(pick.line) } : {}),
     }));
     const listedScoreResult = MatchMonitorOCR.parseListedScores($("listedScores").value);
     if (!listedScoreResult.ok) throw Error("截图精确比分清单中有无效选项：" + listedScoreResult.invalid.join("、"));
@@ -684,15 +696,22 @@
     screenshotUrl = null;
     $("ocrPreview").hidden = true;
     $("ocrFileName").textContent = "尚未选择图片";
-    if (!file) return;
-    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) return setOcrStatus("请选择PNG、JPG或WEBP图片。", true);
-    if (file.size > 15 * 1024 * 1024) return setOcrStatus("图片大于15MB，请先压缩或裁剪后再上传。", true);
+    if (!file) return false;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      setOcrStatus("请选择PNG、JPG或WEBP图片。", true);
+      return false;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      setOcrStatus("图片大于15MB，请先压缩或裁剪后再上传。", true);
+      return false;
+    }
     screenshotFile = file;
     screenshotUrl = URL.createObjectURL(file);
     $("ocrPreview").src = screenshotUrl;
     $("ocrPreview").hidden = false;
     $("ocrFileName").textContent = file.name || "已选择截图";
     setOcrStatus("已载入截图。点击“开始识别”；识别在当前浏览器本地运行，图片不会发送到服务器。" );
+    return true;
   }
 
   function bindScreenshotDropzone(dropzone, onFile, onInvalidDrop) {
@@ -728,6 +747,23 @@
   $("betScreenshot").onchange = () => selectScreenshotFile($("betScreenshot").files?.[0] || null);
   bindScreenshotDropzone($("ocrDropzone"), selectScreenshotFile, (message) => setOcrStatus(message, true));
 
+  function pasteScreenshot(event) {
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+    const imageItem = Array.from(clipboard.items || []).find((item) => item.kind === "file" && item.type.startsWith("image/"));
+    const file = imageItem?.getAsFile() || Array.from(clipboard.files || []).find((item) => item.type.startsWith("image/"));
+    if (!file) return;
+    event.preventDefault();
+    const loaded = selectScreenshotFile(file);
+    $("ocrDropzone").scrollIntoView({ behavior: "smooth", block: "center" });
+    $("createError").textContent = loaded
+      ? "已载入粘贴的票面图片。请在下方点击“开始识别”，核对识别结果后再填入投注。"
+      : "粘贴的图片未载入，请确认格式为 PNG、JPG 或 WebP 且小于 15 MB。";
+  }
+
+  $("tickets").addEventListener("paste", pasteScreenshot);
+  $("ocrDropzone").addEventListener("paste", pasteScreenshot);
+
   $("runOcr").onclick = async () => {
     if (!screenshotFile) return setOcrStatus("请先选择投注页面截图。", true);
     $("runOcr").disabled = true;
@@ -739,6 +775,7 @@
     let scoreGrid = null;
     let scoreGridRows = [];
     let scoreListRows = [];
+    let basketballTicket = null;
     try {
       setOcrStatus("正在载入 PaddleOCR.js（首次使用需联网下载并缓存模型）…");
       const canvases = await imageCanvases(screenshotFile);
@@ -749,6 +786,13 @@
         setOcrStatus("正在识别截图，当前引擎：" + worker.engineName + "…");
         const result = await worker.recognize(canvases.ocr, {}, { blocks: true });
         const pageWords = flattenOcrWords(result.data);
+        basketballTicket = MatchMonitorOCR.parseBasketballTicket(pageWords, canvases.width, canvases.height);
+        if (basketballTicket.matched) {
+          parsedPicks = basketballTicket.picks.map((pick) => ({ ...pick, source: "basketball_ticket" }));
+          selectionRegionCount = 0;
+          $("listedScores").value = "";
+          if (Number.isFinite(basketballTicket.totalStake)) $("ocrBudget").value = String(basketballTicket.totalStake);
+        } else {
         const cropResults = await recognizeSelectedRegions(
           worker,
           canvases.color,
@@ -803,6 +847,7 @@
           .map((row) => ({ ...row, enabled: row.highlighted, stake: 0 }));
         scoreListRows = [...parsedPicks, ...pageCandidatesWithGrid, ...selectedRows, ...scoreGridRows];
         $("listedScores").value = MatchMonitorOCR.listedScoresFromRows(scoreListRows).join(", ");
+        }
       } finally {
         await worker.terminate();
       }
@@ -824,7 +869,21 @@
         ? "逐格识别 SP " + gridScoreCount + "/28；缺失SP的标准比分仍列入候选项，可展开补录"
         : "未能自动定位比分表格";
       const engineStatus = "识别引擎：" + worker.engineName + (worker.fallbackNotice ? "（" + worker.fallbackNotice + "）" : "") + "。";
-      setOcrStatus(engineStatus + (parsedPicks.length
+      if (basketballTicket?.matched) {
+        const fixtureText = basketballTicket.fixture
+          ? "票面比赛：" + basketballTicket.fixture.away + " VS " + basketballTicket.fixture.home + "。"
+          : "";
+        const amountText = Number.isFinite(basketballTicket.totalStake)
+          ? "票面合计 " + money(basketballTicket.totalStake) + "，已按识别项目分配金额。"
+          : "未识别到票面合计金额，请手动填写金额。";
+        const issueText = (basketballTicket.issueNumber ? "第" + basketballTicket.issueNumber + "期。" : "")
+          + (basketballTicket.issue ? basketballTicket.issue + "。" : "");
+        setOcrStatus(engineStatus + "识别到竞彩篮球纸质票。" + issueText + fixtureText
+          + (parsedPicks.length
+            ? "识别到 " + parsedPicks.length + " 项 " + (MARKETS[basketballTicket.market] || "篮球投注") + "；"
+              + amountText + "请对照纸票核对球队、选项、SP和金额。"
+            : issueText + amountText + "尚未识别到可用选项。请核对票面格式，或手动录入投注。"), !parsedPicks.length);
+      } else setOcrStatus(engineStatus + (parsedPicks.length
         ? highlighted
           ? "识别出 " + parsedPicks.length + " 个候选项，检测到 " + selectionRegionCount + " 块高亮选区，并按选区建立 " + highlighted + " 条投注项（选项识别 " + recognizedLabels + "/" + selectionRegionCount + "，SP识别 " + recognizedOdds + "/" + selectionRegionCount + "）。" + gridStatus + "；精确比分清单当前有 " + listedScoreCount + "/28 项，请对照截图核对。"
           : selectionRegionCount

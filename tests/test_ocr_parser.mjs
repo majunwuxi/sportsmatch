@@ -45,6 +45,32 @@ test('classifies all supported markets and infers handicap rows', () => {
   ]));
 });
 
+test('parses a photographed Chinese basketball winning-margin receipt locally', () => {
+  const words = [
+    word('第2610252期', 20, 40),
+    word('竞彩篮球胜分差', 20, 80),
+    word('1场-单场固定 1倍 合计2元', 20, 120),
+    word('客队：印第安纳步行者 VS 主队：布鲁克林篮网', 20, 160),
+    word('（客11-15）@4.800元', 20, 200),
+    word('本票最高可能固定奖金：9.60元', 20, 240),
+  ];
+  const result = parser.parseBasketballTicket(words, 600, 400);
+  assert.equal(result.matched, true);
+  assert.equal(result.market, 'basketball_margin');
+  assert.equal(result.issueNumber, '2610252');
+  assert.deepEqual(JSON.parse(JSON.stringify(result.fixture)), {
+    away: '印第安纳步行者', home: '布鲁克林篮网',
+  });
+  assert.equal(result.totalStake, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.picks.map(({ market, selection, odds, stake, enabled }) => ({ market, selection, odds, stake, enabled })))), [{
+    market: 'basketball_margin', selection: '客胜11-15分', odds: 4.8, stake: 2, enabled: true,
+  }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(parser.validatePick(result.picks[0]))), { ok: true, reason: '有效' });
+  assert.match(uiSource, /basketballTicket\.fixture\.away/);
+  assert.match(uiSource, /篮球纸质票识别/);
+  assert.doesNotMatch(uiSource, /FormData|fetch\(screenshotFile/);
+});
+
 test('recognizes split 负其它 text as a valid correct-score selection', () => {
   const words = [
     word('比分', 150, 20),

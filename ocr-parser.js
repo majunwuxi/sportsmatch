@@ -20,6 +20,10 @@
   const resultOptions = new Set(["胜", "平", "负"]);
   const halfFullOptions = new Set(["胜胜", "胜平", "胜负", "平胜", "平平", "平负", "负胜", "负平", "负负"]);
   const totalGoalOptions = new Set(["0", "1", "2", "3", "4", "5", "6", "7+"]);
+  const basketballResultOptions = new Set(["胜", "负"]);
+  const basketballTotalOptions = new Set(["大", "小"]);
+  const basketballMarginBands = ["1-5", "6-10", "11-15", "16-20", "21-25", "26+"];
+  const basketballMarginOptions = new Set(basketballMarginBands.flatMap((band) => ["主胜" + band + "分", "客胜" + band + "分"]));
 
   function normalize(value) {
     return String(value ?? "")
@@ -28,8 +32,25 @@
       .replace(/[．。]/g, ".")
       .replace(/[＋]/g, "+")
       .replace(/[，,]/g, ".")
+      .replace(/[（【]/g, "(")
+      .replace(/[）】]/g, ")")
+      .replace(/[＠]/g, "@")
       .replace(/[\s\u200b\ufeff]/g, "")
       .trim();
+  }
+
+  function basketballMarginSelection(value) {
+    const text = normalize(value).replace(/[()]/g, "");
+    const match = text.match(/^(主|客)(?:队)?(?:胜|负)?(1-5|6-10|11-15|16-20|21-25|26\+|26分以上|26分及以上)(?:分)?$/);
+    if (!match) return null;
+    const side = match[1] === "主" ? "主胜" : "客胜";
+    const band = match[2].startsWith("26") ? "26+" : match[2];
+    return side + band + "分";
+  }
+
+  function halfPointLine(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && Math.abs(number * 2 - Math.round(number * 2)) < 1e-8;
   }
 
   function getBox(word) {
@@ -67,6 +88,10 @@
   }
 
   function marketForHeading(text) {
+    if (/胜分差/.test(text)) return "basketball_margin";
+    if (/让分胜负/.test(text)) return "basketball_handicap";
+    if (/竞彩篮球.*(?:大小分|总分)|篮球大小分|大小分/.test(text)) return "basketball_total";
+    if (/竞彩篮球胜负|篮球胜负/.test(text)) return "basketball_result";
     if (/总进球/.test(text)) return "total_goals";
     if (/半全场/.test(text)) return "half_full";
     if (/让球.*胜平负|胜平负.*让球|让球/.test(text)) return "handicap";
@@ -219,6 +244,21 @@
 
   function classify(label, section, words, height) {
     const text = normalize(label.text);
+    if (section === "basketball_margin") {
+      const selection = basketballMarginSelection(text);
+      return selection ? { market: section, selection, handicap: null, line: null } : null;
+    }
+    if (section === "basketball_total" && basketballTotalOptions.has(text)) {
+      return { market: section, selection: text, handicap: null, line: inferBasketballLine(label, words, height) };
+    }
+    if (section === "basketball_result" && ["胜", "负", "主胜", "客胜", "主负", "客负"].includes(text)) {
+      const selection = ["主胜", "客负"].includes(text) ? "胜" : ["客胜", "主负"].includes(text) ? "负" : text;
+      return { market: section, selection, handicap: null, line: null };
+    }
+    if (section === "basketball_handicap" && ["胜", "负", "主胜", "客胜", "主负", "客负"].includes(text)) {
+      const selection = ["主胜", "客负"].includes(text) ? "胜" : ["客胜", "主负"].includes(text) ? "负" : text;
+      return { market: section, selection, handicap: inferBasketballHandicap(label, words, height), line: null };
+    }
     if (scoreOptions.has(text)) return { market: "correct_score", selection: text, handicap: null };
     if (halfFullOptions.has(text)) return { market: "half_full", selection: text, handicap: null };
     if (section === "total_goals" && totalGoalOptions.has(text)) return { market: "total_goals", selection: text, handicap: null };
@@ -229,6 +269,32 @@
       if (!market) return null;
       const selection = text === "主胜" ? "胜" : text === "客胜" ? "负" : text;
       return { market, selection, handicap: market === "handicap" ? inferHandicap(label, words, height) : null };
+    }
+    return null;
+  }
+
+  function inferBasketballLine(label, words, height) {
+    const box = getBox(label);
+    const lines = groupLines(words || [], height).filter((line) => Math.abs(line.cy - box.cy) <= Math.max(40, height * 0.08));
+    const candidates = lines.flatMap((line) => {
+      const match = line.text.match(/(?:大小分|预设总分|总分|大于|小于)[^\d]{0,8}(\d{2,3}(?:\.\d)?)/);
+      if (!match) return [];
+      const value = Number(match[1]);
+      return Number.isFinite(value) ? [{ value, distance: Math.abs(line.cy - box.cy) }] : [];
+    }).sort((a, b) => a.distance - b.distance);
+    return candidates[0]?.value ?? null;
+  }
+
+  function inferBasketballHandicap(label, words, height) {
+    const box = getBox(label);
+    const lines = groupLines(words || [], height).filter((line) => Math.abs(line.cy - box.cy) <= Math.max(45, height * 0.08));
+    for (const line of lines.sort((a, b) => Math.abs(a.cy - box.cy) - Math.abs(b.cy - box.cy))) {
+      let match = line.text.match(/(?:主队)?(?:让分|让分数|让分值|主让分)[:：]?([+-]?\d{1,2}(?:\.\d)?)/);
+      if (match) return Number(match[1]);
+      match = line.text.match(/主受让[:：]?(\d{1,2}\.\d)/);
+      if (match) return Number(match[1]);
+      match = line.text.match(/主让[:：]?(\d{1,2}\.\d)/);
+      if (match) return -Number(match[1]);
     }
     return null;
   }
@@ -269,10 +335,13 @@
         market: candidate.classified.market,
         selection: candidate.classified.selection,
         handicap: candidate.classified.handicap,
+        line: candidate.classified.line ?? null,
         odds: match?.odds ?? null,
         confidence,
         highlighted: Boolean(isHighlighted(candidate.word.bbox || box)),
-        needsReview: !match || confidence < 70 || (candidate.classified.market === "handicap" && candidate.classified.handicap === null),
+        needsReview: !match || confidence < 70
+          || (["handicap", "basketball_handicap"].includes(candidate.classified.market) && candidate.classified.handicap === null)
+          || (candidate.classified.market === "basketball_total" && candidate.classified.line === null),
         position: { x: Math.round(box.cx), y: Math.round(box.cy) },
       });
     }
@@ -290,13 +359,109 @@
     const allowed = market === "correct_score" ? scoreOptions
       : market === "match_result" || market === "handicap" ? resultOptions
       : market === "total_goals" ? totalGoalOptions
-      : market === "half_full" ? halfFullOptions : null;
+      : market === "half_full" ? halfFullOptions
+      : market === "basketball_result" || market === "basketball_handicap" ? basketballResultOptions
+      : market === "basketball_total" ? basketballTotalOptions
+      : market === "basketball_margin" ? basketballMarginOptions : null;
     if (!allowed) return { ok: false, reason: "无法识别玩法" };
     if (!allowed.has(selection)) return { ok: false, reason: "投注选项不属于该玩法" };
     const odds = Number(pick?.odds);
     if (!Number.isFinite(odds) || odds < 1) return { ok: false, reason: "SP须为大于或等于1的数字" };
     if (market === "handicap" && (pick?.handicap === null || pick?.handicap === undefined || pick?.handicap === "" || !Number.isInteger(Number(pick.handicap)) || Number(pick.handicap) < -9 || Number(pick.handicap) > 9)) return { ok: false, reason: "让球数须为-9到9的整数" };
+    if (market === "basketball_handicap" && (pick?.handicap === null || pick?.handicap === undefined || pick?.handicap === "" || !halfPointLine(pick.handicap))) return { ok: false, reason: "竞彩篮球让分须按票面填写半分值" };
+    if (market === "basketball_total" && (pick?.line === null || pick?.line === undefined || pick?.line === "" || !halfPointLine(pick.line))) return { ok: false, reason: "竞彩篮球大小分须填写票面半分值" };
     return { ok: true, reason: "有效" };
+  }
+
+  function parseBasketballTicket(words, width, height) {
+    const validWords = (words || []).filter((word) => normalize(word.text)
+      && Number(word.confidence ?? 100) >= 20 && getBox(word).right > getBox(word).left);
+    const lines = groupLines(validWords, height);
+    const recognizedText = lines.map((line) => line.text).join("");
+    const text = normalize(recognizedText);
+    if (!/竞彩篮球|篮球胜负|让分胜负|大小分|胜分差/.test(text)
+      || !/单场固定|本票最高可能固定奖金|合计\d+(?:\.\d+)?元|第\d+期/.test(text)) {
+      return { matched: false, picks: [] };
+    }
+
+    const market = /胜分差/.test(text) ? "basketball_margin"
+      : /让分胜负/.test(text) ? "basketball_handicap"
+      : /大小分/.test(text) ? "basketball_total"
+      : /竞彩篮球胜负|篮球胜负/.test(text) ? "basketball_result" : null;
+    if (!market) return { matched: true, market: null, picks: [], totalStake: null, fixture: null };
+
+    const oddsAfter = (end) => {
+      const fragment = text.slice(end, end + 28);
+      const match = fragment.match(/^@([0-9OQ]+(?:\.[0-9OQ]+)?)/i)
+        || fragment.match(/^.{0,4}?@([0-9OQ]+(?:\.[0-9OQ]+)?)/i);
+      if (!match) return null;
+      const odds = Number(match[1].replace(/[OQ]/gi, "0"));
+      return Number.isFinite(odds) && odds >= 1 ? odds : null;
+    };
+    const options = [];
+    const addMatches = (pattern, mapSelection, mapLine = () => ({ handicap: null, line: null })) => {
+      for (const match of text.matchAll(pattern)) {
+        const rawSelection = match[1];
+        const selection = mapSelection(rawSelection, match);
+        if (!selection) continue;
+        const extra = mapLine(match);
+        options.push({ selection, odds: oddsAfter(match.index + match[0].length), ...extra,
+          position: { x: 0, y: Math.round(height * 0.65) } });
+      }
+    };
+
+    if (market === "basketball_margin") {
+      addMatches(/[（(]?(主|客)(?:队)?(?:胜|负)?(1-5|6-10|11-15|16-20|21-25|26\+)(?:分)?[）)]?/g,
+        (_raw, match) => basketballMarginSelection(match[0]),
+        () => ({ handicap: null, line: null }));
+    } else if (market === "basketball_result") {
+      addMatches(/[（(]?(主胜|客胜|主负|客负|胜|负)[）)]?/g,
+        (raw) => ["主胜", "客负"].includes(raw) ? "胜" : ["客胜", "主负"].includes(raw) ? "负" : raw,
+        () => ({ handicap: null, line: null }));
+    } else if (market === "basketball_handicap") {
+      const handicapMatch = text.match(/(?:主队)?(?:让分|让分数|让分值|主让分)[:：]?([+-]?\d{1,2}\.\d)/)
+        || text.match(/主让[:：]?(\d{1,2}\.\d)/);
+      const handicap = handicapMatch ? Number(handicapMatch[1]) * (handicapMatch[0].includes("主让") && !/[+-]/.test(handicapMatch[1]) ? -1 : 1) : null;
+      addMatches(/[（(]?(主胜|客胜|主负|客负|胜|负)[）)]?/g,
+        (raw) => ["主胜", "客负"].includes(raw) ? "胜" : ["客胜", "主负"].includes(raw) ? "负" : raw,
+        () => ({ handicap, line: null }));
+    } else if (market === "basketball_total") {
+      addMatches(/[（(]?(大|小)(?:于|分)?(\d{2,3}(?:\.\d)?)[）)]?/g,
+        (raw, match) => raw,
+        (_match) => ({ handicap: null, line: Number(_match[2]) }));
+    }
+
+    const unique = new Map();
+    for (const option of options) {
+      const key = [option.selection, option.handicap, option.line, option.odds].join("|");
+      if (!unique.has(key)) unique.set(key, option);
+    }
+    const parsedOptions = [...unique.values()];
+    const totalMatch = text.match(/合计(?:金额)?(\d+(?:\.\d+)?)元/);
+    const totalStake = totalMatch ? Number(totalMatch[1]) : null;
+    const perOptionStake = Number.isFinite(totalStake) && parsedOptions.length ? totalStake / parsedOptions.length : 0;
+    const fixtureMatch = text.match(/客队[:：]?(.+?)(?:vs|v)主队[:：]?(.+?)(?=第\d+场|[（(]|$)/i);
+    const fixture = fixtureMatch ? { away: fixtureMatch[1], home: fixtureMatch[2] } : null;
+    const issueMatch = text.match(/第(\d{6,})期/);
+    const meanConfidence = validWords.length
+      ? Math.round(validWords.reduce((sum, word) => sum + Number(word.confidence ?? 100), 0) / validWords.length)
+      : 0;
+    const picks = parsedOptions.map((option, index) => ({
+      market,
+      selection: option.selection,
+      handicap: option.handicap,
+      line: option.line,
+      odds: option.odds,
+      confidence: meanConfidence,
+      highlighted: true,
+      enabled: true,
+      stake: perOptionStake,
+      needsReview: true,
+      unrecognized: false,
+      position: { x: option.position?.x ?? 0, y: Math.round(height * (0.55 + index * 0.03)) },
+    }));
+    return { matched: true, market, picks, totalStake, fixture, issueNumber: issueMatch?.[1] || null,
+      issue: parsedOptions.length ? null : "未能从票面找到带 SP 的篮球选项" };
   }
 
   function listedScoresFromRows(rows) {
@@ -546,7 +711,9 @@
   function isSelectionLabel(text) {
     const value = normalize(text);
     return scoreOptions.has(value) || halfFullOptions.has(value) || totalGoalOptions.has(value)
-      || resultOptions.has(value) || value === "主胜" || value === "客胜";
+      || resultOptions.has(value) || basketballResultOptions.has(value) || basketballTotalOptions.has(value)
+      || basketballMarginOptions.has(value) || Boolean(basketballMarginSelection(value))
+      || ["主胜", "客胜", "主负", "客负"].includes(value);
   }
 
   function repairSelectedScoreLabel(text) {
@@ -570,6 +737,11 @@
     if (market === "match_result" || market === "handicap") {
       return ["胜", "平", "负", "主胜", "客胜"].includes(value);
     }
+    if (market === "basketball_result" || market === "basketball_handicap") {
+      return ["胜", "负", "主胜", "客胜", "主负", "客负"].includes(value);
+    }
+    if (market === "basketball_total") return basketballTotalOptions.has(value);
+    if (market === "basketball_margin") return basketballMarginOptions.has(value) || Boolean(basketballMarginSelection(value));
     return false;
   }
 
@@ -728,12 +900,16 @@
 
   function inferSelectedMarket(words, width, height) {
     const tokens = mergeFragments(groupLines(words || [], height), width);
+    const namedMarket = tokens.map((word) => marketForHeading(normalize(word.text))).find(Boolean);
+    if (namedMarket) return namedMarket;
     for (const word of tokens) {
       const text = normalize(word.text);
+      if (basketballMarginSelection(text)) return "basketball_margin";
       if (scoreOptions.has(text) || repairSelectedScoreLabel(text)) return "correct_score";
       if (halfFullOptions.has(text)) return "half_full";
     }
     if (tokens.some((word) => totalGoalOptions.has(normalize(word.text)))) return "total_goals";
+    if (tokens.some((word) => basketballTotalOptions.has(normalize(word.text)))) return "basketball_total";
     if (tokens.some((word) => ["主胜", "客胜", "胜", "平", "负"].includes(normalize(word.text)))) return "match_result";
     return null;
   }
@@ -802,5 +978,5 @@
     return data;
   }
 
-  root.MatchMonitorOCR = { parse, parseSelectedRegions, parseScoreGridCells, preferScoreOdds, preprocessScoreOddsPixels, inferScoreGrid, scoreGridRows, scoreSelectedCrop, marketAt, validatePick, normalize, listedScoresFromRows, parseListedScores, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels, paddleWordsFromResult };
+  root.MatchMonitorOCR = { parse, parseSelectedRegions, parseScoreGridCells, parseBasketballTicket, preferScoreOdds, preprocessScoreOddsPixels, inferScoreGrid, scoreGridRows, scoreSelectedCrop, marketAt, validatePick, normalize, listedScoresFromRows, parseListedScores, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels, paddleWordsFromResult };
 })(globalThis);
