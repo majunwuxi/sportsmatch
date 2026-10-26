@@ -611,6 +611,13 @@ class ParlayIn(BaseModel):
     declared_payout:float|None=Field(default=None,gt=0,allow_inf_nan=False)
     legs:list[ParlayLegIn]
 
+class ParlayOddsLegUpdateIn(BaseModel):
+    leg_id:int=Field(gt=0)
+    odds:list[float]=Field(min_length=1,max_length=24)
+
+class ParlayOddsUpdateIn(BaseModel):
+    legs:list[ParlayOddsLegUpdateIn]=Field(min_length=2,max_length=8)
+
 class ConfirmVoidIn(BaseModel):
     confirmed:bool
 
@@ -1051,6 +1058,37 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
     result=sync_parlay(parlay_id)
     if result:result["resumed_fixture_ids"]=resumed
     return result
+
+@app.put("/api/parlays/{parlay_id}/odds")
+def update_parlay_odds(parlay_id:int,data:ParlayOddsUpdateIn,_:str=Depends(auth)):
+    if any(not math.isfinite(value) or value<1 for item in data.legs for value in item.odds):
+        raise HTTPException(422,"每个SP必须是大于或等于1的有效数字")
+    with TASK_LOCK:
+        with conn() as c:
+            parent=c.execute("SELECT status FROM parlay_tickets WHERE id=?",(parlay_id,)).fetchone()
+            if not parent:raise HTTPException(404,"Parlay ticket not found")
+            if parent["status"] in {"won","lost"}:
+                raise HTTPException(409,"已结算的过关票不能修改SP")
+            current=load_parlay(parlay_id)
+            if current and evaluate_parlay(*current)["status"] in {"won","lost"}:
+                raise HTTPException(409,"比赛已完成结算，不能修改过关票SP")
+            legs=[dict(row) for row in c.execute(
+                "SELECT * FROM parlay_legs WHERE parlay_id=? ORDER BY leg_index",(parlay_id,))]
+            updates={item.leg_id:item.odds for item in data.legs}
+            if len(updates)!=len(data.legs) or set(updates)!={int(leg["id"]) for leg in legs}:
+                raise HTTPException(422,"SP修改数据必须包含这张过关票的全部比赛")
+            for leg in legs:
+                choices=_parlay_leg_choices(leg)
+                odds=updates[int(leg["id"])]
+                if len(odds)!=len(choices):
+                    raise HTTPException(422,"每场比赛的SP数量必须与投注项数量一致")
+                for choice,value in zip(choices,odds):choice["odds"]=float(value)
+                c.execute("UPDATE parlay_legs SET odds=?,selections_json=? WHERE id=? AND parlay_id=?",
+                    (str(choices[0]["odds"]),json.dumps(choices,ensure_ascii=False,separators=(",",":")),leg["id"],parlay_id))
+            c.execute("UPDATE parlay_tickets SET updated_at=? WHERE id=?",
+                (datetime.now(timezone.utc).isoformat(),parlay_id))
+    result=sync_parlay(parlay_id,send_notice=False)
+    return result or {"ok":True}
 
 @app.post("/api/parlays/{parlay_id}/stop")
 def stop_parlay(parlay_id:int,_:str=Depends(auth)):
