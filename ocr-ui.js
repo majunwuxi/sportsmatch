@@ -347,6 +347,11 @@
     });
   }
 
+  function ocrErrorMessage(error) {
+    const message = String(error?.message || error || "未知错误").replace(/\s+/g, " ").trim();
+    return message.slice(0, 220);
+  }
+
   const paddleOcrOptions = {
     lang: "ch",
     ocrVersion: "PP-OCRv5",
@@ -363,11 +368,13 @@
     return MatchMonitorOCR.paddleWordsFromResult(result);
   }
 
-  async function createTesseractWorker() {
+  async function createTesseractWorker(fallbackNotice = "") {
     await loadTesseract();
     return Tesseract.createWorker(["chi_sim", "eng"], 1, {
       logger: (event) => {
-        if (event.status) setOcrStatus("截图识别中（备用引擎）: " + event.status + (event.progress ? " " + Math.round(event.progress * 100) + "%" : ""));
+        if (event.status) setOcrStatus("截图识别中（Tesseract.js备用）: " + event.status
+          + (event.progress ? " " + Math.round(event.progress * 100) + "%" : "")
+          + (fallbackNotice ? "；PaddleOCR失败原因：" + fallbackNotice : ""));
       },
     });
   }
@@ -381,44 +388,62 @@
     const createPaddle = async (worker) => PaddleOCR.create({ ...paddleOcrOptions, worker });
     const getTesseract = async (reason) => {
       if (!tesseract) {
-        fallbackNotice = reason ? String(reason.message || reason).slice(0, 180) : "PaddleOCR.js不可用";
-        setOcrStatus("PaddleOCR.js不可用，正在切换 Tesseract.js 备用识别…");
-        tesseract = await createTesseractWorker();
+        fallbackNotice = reason ? ocrErrorMessage(reason) : "PaddleOCR.js不可用";
+        setOcrStatus("PaddleOCR.js不可用（" + fallbackNotice + "），正在切换 Tesseract.js 备用识别…");
+        try {
+          tesseract = await createTesseractWorker(fallbackNotice);
+        } catch (error) {
+          throw new Error("PaddleOCR.js失败（" + fallbackNotice + "）；Tesseract.js备用引擎也无法启动（" + ocrErrorMessage(error) + "）。");
+        }
       }
       engine = "tesseract";
       return tesseract;
     };
 
+    setOcrStatus("正在载入 PaddleOCR.js（PP-OCRv5）…首次使用需要联网下载模型。");
     try {
-      setOcrStatus("正在载入 PaddleOCR.js（PP-OCRv5）…首次使用需要联网下载模型。");
       ({ PaddleOCR } = await import("https://cdn.jsdelivr.net/npm/@paddleocr/paddleocr-js@0.4.2/dist/index.mjs"));
+    } catch (error) {
+      await getTesseract("SDK模块加载失败：" + ocrErrorMessage(error));
+    }
+
+    if (!tesseract) {
+      let workerError = null;
       try {
         paddle = await createPaddle(true);
-      } catch (workerError) {
-        setOcrStatus("正在切换 PaddleOCR.js 浏览器主线程模式…");
-        paddle = await createPaddle(false);
-        engine = "paddle-main";
+      } catch (error) {
+        workerError = error;
+        setOcrStatus("PaddleOCR Worker初始化失败（" + ocrErrorMessage(error) + "），正在尝试浏览器主线程模式…");
+        try {
+          paddle = await createPaddle(false);
+          engine = "paddle-main";
+        } catch (mainThreadError) {
+          await getTesseract("初始化失败。Worker：" + ocrErrorMessage(workerError)
+            + "；主线程：" + ocrErrorMessage(mainThreadError));
+        }
       }
-    } catch (error) {
-      await getTesseract(error);
     }
+
+    if (tesseract) engine = "tesseract";
 
     async function runPaddle(images) {
       try {
         return await paddle.predict(images);
       } catch (workerError) {
         if (engine === "paddle-worker") {
+          setOcrStatus("PaddleOCR Worker识别失败（" + ocrErrorMessage(workerError) + "），正在切换浏览器主线程模式…");
           try {
-            await paddle.dispose();
+            try { await paddle.dispose(); } catch { /* A crashed worker can reject disposal; still retry on the main thread. */ }
             paddle = await createPaddle(false);
             engine = "paddle-main";
             setOcrStatus("PaddleOCR.js已切换到浏览器主线程，继续本地识别…");
             return await paddle.predict(images);
           } catch (mainThreadError) {
-            await getTesseract(mainThreadError);
+            await getTesseract("识别失败。Worker：" + ocrErrorMessage(workerError)
+              + "；主线程：" + ocrErrorMessage(mainThreadError));
           }
         } else {
-          await getTesseract(workerError);
+          await getTesseract("PaddleOCR主线程识别失败：" + ocrErrorMessage(workerError));
         }
         return null;
       }
@@ -812,12 +837,13 @@
     let scoreListRows = [];
     let basketballTicket = null;
     let parlayTicket = null;
+    let ocrWorker = null;
     try {
       setOcrStatus("正在载入 PaddleOCR.js（首次使用需联网下载并缓存模型）…");
       const canvases = await imageCanvases(screenshotFile);
       const selectionRegions = detectSelectedRegions(canvases.color, canvases.ocr);
       selectionRegionCount = selectionRegions.length;
-      const worker = await createOcrWorker();
+      const worker = ocrWorker = await createOcrWorker();
       try {
         setOcrStatus("正在识别截图，当前引擎：" + worker.engineName + "…");
         const result = await worker.recognize(canvases.ocr, {}, { blocks: true });
@@ -963,7 +989,10 @@
         : "没有识别到可用投注项。请换一张包含玩法标题、选项和SP的清晰截图，或手动填写模拟器。"), !parsedPicks.length);
     } catch (error) {
       $("simulatorManual").hidden = false;
-      setOcrStatus(error?.message || "截图识别失败。请手动选择玩法和填写SP。", true);
+      const engineStatus = ocrWorker
+        ? "识别引擎：" + ocrWorker.engineName + (ocrWorker.fallbackNotice ? "（" + ocrWorker.fallbackNotice + "）" : "") + "；"
+        : "";
+      setOcrStatus(engineStatus + (error?.message || "截图识别失败。请手动选择玩法和填写SP。"), true);
     } finally {
       $("runOcr").disabled = false;
     }
