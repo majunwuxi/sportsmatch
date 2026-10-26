@@ -904,11 +904,14 @@
       clearOcrConfirmation();
       renderOcrRows();
       if (parsedPicks.length) {
-        $("market").value = (parsedPicks.find((row) => row.highlighted) || parsedPicks[0]).market;
-        renderRows();
+        const simulatorMarket = (parsedPicks.find((row) => row.highlighted) || parsedPicks[0]).market;
+        if (window.MatchMonitorCore?.getOptions()?.[simulatorMarket]) {
+          $("market").value = simulatorMarket;
+          renderRows();
+        }
       }
       const hasRecognizedSelections = parsedPicks.some((row) => row.highlighted && row.selection && !row.unrecognized);
-      $("simulatorManual").hidden = hasRecognizedSelections;
+      $("simulatorManual").hidden = Boolean(basketballTicket?.matched) || hasRecognizedSelections;
       const highlighted = parsedPicks.filter((row) => row.highlighted).length;
       const recognizedLabels = parsedPicks.filter((row) => row.highlighted && row.selection && !row.unrecognized).length;
       const recognizedOdds = parsedPicks.filter((row) => row.highlighted && row.odds !== null).length;
