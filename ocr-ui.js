@@ -324,6 +324,9 @@
     $("ocrSelectedCount").textContent = "已选 0 项";
     $("ocrSelectedTotal").textContent = money(0);
     $("listedScores").value = "";
+    $("ocrParlayJsonPanel").hidden = true;
+    $("ocrParlayJson").value = "";
+    $("ocrParlayJsonCopyStatus").textContent = "";
     $("toggleOcrCandidates").hidden = true;
     setOcrStatus("图片仅在本机浏览器识别，不会上传到 Match Monitor 后台。请上传投注页面截图。" );
     $("ocrPreview").hidden = true;
@@ -755,6 +758,9 @@
     screenshotFile = null;
     screenshotUrl = null;
     $("ocrPreview").hidden = true;
+    $("ocrParlayJsonPanel").hidden = true;
+    $("ocrParlayJson").value = "";
+    $("ocrParlayJsonCopyStatus").textContent = "";
     $("ocrFileName").textContent = "尚未选择图片";
     if (!file) return false;
     if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
@@ -829,6 +835,9 @@
     $("runOcr").disabled = true;
     $("ocrReview").hidden = true;
     $("simulatorManual").hidden = true;
+    $("ocrParlayJsonPanel").hidden = true;
+    $("ocrParlayJson").value = "";
+    $("ocrParlayJsonCopyStatus").textContent = "";
     parsedPicks = null;
     showAllCandidates = false;
     selectionRegionCount = 0;
@@ -933,11 +942,15 @@
       if (parlayTicket?.matched) {
         $("ocrReview").hidden = true;
         $("simulatorManual").hidden = true;
-        window.MatchMonitorParlayUI?.importReceipt(parlayTicket);
+        const jsonData = window.MatchMonitorParlayParser?.receiptToImportJson(parlayTicket);
+        if (!jsonData) throw new Error("过关票已识别，但JSON生成器未加载。请刷新页面后重试。");
+        $("ocrParlayJson").value = JSON.stringify(jsonData, null, 2);
+        $("ocrParlayJsonPanel").hidden = false;
         const engineStatus = "识别引擎：" + worker.engineName
           + (worker.fallbackNotice ? "（" + worker.fallbackNotice + "）" : "") + "。";
-        const ticketText = `识别到${parlayTicket.sport === "basketball" ? "竞彩篮球" : "竞彩足球"}过关票：${parlayTicket.legs.length}场、${parlayTicket.betCount || "?"}注、${parlayTicket.multiples || 1}倍。已填入过关监测编辑器；请核对每场玩法、投注项和SP，并逐场绑定真实比赛。`;
+        const ticketText = `识别到${parlayTicket.sport === "basketball" ? "竞彩篮球" : "竞彩足球"}过关票：${parlayTicket.legs.length}场、${parlayTicket.betCount || "?"}注、${parlayTicket.multiples || 1}倍。JSON 已显示在下方；复制后返回主窗口，粘贴到“票面文字 / OCR 识别文字”，点击“识别文字并生成表格”，再绑定真实比赛。`;
         setOcrStatus(engineStatus + ticketText + (parlayTicket.warnings?.length ? " " + parlayTicket.warnings.join(" ") : ""));
+        $("ocrParlayJsonPanel").scrollIntoView({ behavior:"smooth", block:"center" });
         return;
       }
       $("ocrReview").hidden = false;
@@ -999,6 +1012,19 @@
   };
 
   $("clearOcr").onclick = clearOcr;
+  $("copyOcrParlayJson").onclick = async () => {
+    const field = $("ocrParlayJson");
+    if (!field.value) return;
+    let copied = false;
+    try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(field.value); copied = true; } } catch {}
+    if (!copied) {
+      field.focus();field.select();
+      try { copied = document.execCommand("copy"); } catch {}
+    }
+    $("ocrParlayJsonCopyStatus").textContent = copied
+      ? "JSON 已复制。请切回主窗口粘贴到过关票文字框。"
+      : "自动复制失败，请点文本框后全选并复制。";
+  };
   $("listedScores").oninput = () => clearOcrConfirmation();
   $("toggleOcrCandidates").onclick = () => { showAllCandidates = !showAllCandidates; renderOcrRows(); };
   $("manualMode").onclick = () => { $("simulatorManual").hidden = false; $("market").focus(); };

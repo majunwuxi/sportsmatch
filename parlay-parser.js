@@ -88,6 +88,90 @@
     };
   }
 
+  function receiptToImportJson(receipt) {
+    const finite = value => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+    return {
+      schema_version: 1,
+      type: "sportsmatch.parlay_receipt",
+      sport: receipt.sport === "basketball" ? "basketball" : "football",
+      pass_type: receipt.passType || null,
+      multiples: Number.isInteger(receipt.multiples) && receipt.multiples > 0 ? receipt.multiples : 1,
+      bet_count: Number.isFinite(receipt.betCount) ? receipt.betCount : null,
+      total: Number.isFinite(receipt.total) ? receipt.total : null,
+      payout_range: Array.isArray(receipt.payoutRange) ? receipt.payoutRange : null,
+      legs: (receipt.legs || []).map((leg, index) => ({
+        number: index + 1,
+        home: String(leg.home || "").trim(),
+        away: String(leg.away || "").trim(),
+        sport: leg.sport === "basketball" || receipt.sport === "basketball" ? "basketball" : "football",
+        ...(leg.league_code ? {league_code:leg.league_code} : {}),
+        selections: (leg.selections || []).map(pick => ({
+          market: pick.market,
+          selection: pick.selection,
+          odds: finite(pick.odds) ? Number(pick.odds) : null,
+          handicap: finite(pick.handicap) ? Number(pick.handicap) : null,
+          line: finite(pick.line) ? Number(pick.line) : null,
+        })),
+      })),
+      warnings: (receipt.warnings || []).map(String),
+    };
+  }
+
+  function parseParlayImport(raw) {
+    const source = String(raw || "").trim();
+    if (!/^[{[]/.test(source)) return parseParlayText(source);
+    const finite = value => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+    let data;
+    try { data = JSON.parse(source); }
+    catch { return {passType:null,multiples:null,total:null,payout:null,legs:[],warnings:["JSON格式无效，请检查括号、引号和逗号。"]}; }
+    if (!data || Array.isArray(data) || typeof data !== "object" || !Array.isArray(data.legs)) {
+      return {passType:null,multiples:null,total:null,payout:null,legs:[],warnings:["这不是过关票识别JSON，请粘贴弹窗生成的过关票JSON。"]};
+    }
+    const sport = data.sport === "basketball" ? "basketball" : "football";
+    const warnings = Array.isArray(data.warnings) ? data.warnings.filter(item => typeof item === "string") : [];
+    const legs = data.legs.map((leg, index) => {
+      const sourceSelections = Array.isArray(leg?.selections) ? leg.selections : [];
+      const selections = sourceSelections.map(pick => ({
+        market:String(pick?.market || leg?.market || (sport === "basketball" ? "basketball_result" : "match_result")),
+        selection:String(pick?.selection || ""),
+        odds:finite(pick?.odds) ? String(pick.odds) : "",
+        handicap:finite(pick?.handicap) ? Number(pick.handicap) : null,
+        line:finite(pick?.line) ? Number(pick.line) : null,
+      }));
+      if (!String(leg?.home || "").trim() || !String(leg?.away || "").trim()) warnings.push(`第${index + 1}场缺少主队或客队名称，请核对JSON。`);
+      if (!selections.length) {
+        const pick = {
+          market:String(leg?.market || (sport === "basketball" ? "basketball_result" : "match_result")),
+          selection:String(leg?.selection || ""),
+          odds:finite(leg?.odds) ? String(leg.odds) : "",
+          handicap:finite(leg?.handicap) ? Number(leg.handicap) : null,
+          line:finite(leg?.line) ? Number(leg.line) : null,
+        };
+        if (pick.selection || pick.odds) selections.push(pick);
+      }
+      return {
+        home:String(leg?.home || "").trim(), away:String(leg?.away || "").trim(),
+        sport:leg?.sport === "basketball" || sport === "basketball" ? "basketball" : "football",
+        ...(leg?.league_code ? {league_code:String(leg.league_code)} : {}),
+        market:selections[0]?.market || String(leg?.market || (sport === "basketball" ? "basketball_result" : "match_result")),
+        selection:selections[0]?.selection || String(leg?.selection || ""),
+        odds:selections[0]?.odds ?? (finite(leg?.odds) ? String(leg.odds) : ""),
+        handicap:selections[0]?.handicap ?? (finite(leg?.handicap) ? Number(leg.handicap) : null),
+        line:selections[0]?.line ?? (finite(leg?.line) ? Number(leg.line) : null),
+        selections, fixture_id:null, kickoff:null, league_name:leg?.league_name || null,
+      };
+    });
+    const payoutRange = Array.isArray(data.payout_range) ? data.payout_range : null;
+    return {
+      passType:typeof data.pass_type === "string" ? data.pass_type : null,
+      multiples:Number.isInteger(data.multiples) && data.multiples > 0 ? data.multiples : null,
+      total:finite(data.total) ? Number(data.total) : null,
+      payout:payoutRange && finite(payoutRange[1]) ? Number(payoutRange[1])
+        : finite(data.payout) ? Number(data.payout) : null,
+      legs, warnings,
+    };
+  }
+
   function receiptLines(words, height) {
     const valid = (words || []).filter(word => String(word?.text || "").trim()
       && Number(word.confidence ?? 100) >= 15);
@@ -250,5 +334,5 @@
     };
   }
 
-  root.MatchMonitorParlayParser = {parseParlayText, parseParlayReceipt};
+  root.MatchMonitorParlayParser = {parseParlayText, parseParlayReceipt, parseParlayImport, receiptToImportJson};
 })(globalThis);

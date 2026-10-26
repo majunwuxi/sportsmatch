@@ -159,13 +159,16 @@
   }
 
   function importText() {
-    const parsed=root.MatchMonitorParlayParser.parseParlayText($("parlayText").value);
+    const parser=root.MatchMonitorParlayParser;
+    const parsed=(parser.parseParlayImport||parser.parseParlayText)($("parlayText").value);
     if(parsed.passType&&PASS_OPTIONS.has(parsed.passType))$("parlayPassType").value=parsed.passType;
     else if(parsed.passType)parsed.warnings.push(`当前暂不支持 ${parsed.passType}，请在下拉框中选择有效过关方式。`);
     if(parsed.multiples)$("parlayMultiples").value=String(parsed.multiples);
     if(parsed.total!==null)$("parlayDeclaredTotal").value=String(parsed.total);
     if(parsed.payout!==null)$("parlayDeclaredPayout").value=String(parsed.payout);
-    legs=parsed.legs.map(leg=>({...leg,fixture_id:null,sport:leg.sport||($("sport").value==="basketball"?"basketball":"football"),league_code:leg.league_code||($("basketballLeague").value||"nba"),selections:leg.selections||[{market:leg.market,selection:leg.selection,odds:leg.odds??"",handicap:leg.handicap??null,line:leg.line??null}]}));bindingIndex=null;$("parlayError").textContent="";renderLegs();
+    legs=parsed.legs.map(leg=>({...leg,fixture_id:null,sport:leg.sport||($("sport").value==="basketball"?"basketball":"football"),league_code:leg.league_code||($("basketballLeague").value||"nba"),selections:leg.selections||[{market:leg.market,selection:leg.selection,odds:leg.odds??"",handicap:leg.handicap??null,line:leg.line??null}]}));bindingIndex=null;$("parlayError").textContent="";
+    if(legs.length){$("sport").value=legs[0].sport||"football";if(legs[0].sport==="basketball")$("basketballLeague").value=legs[0].league_code||"nba";core.updateSportInputs?.()}
+    renderLegs();
     $("parlayImportStatus").textContent=parsed.warnings.length?parsed.warnings.join(" "): `识别到 ${legs.length} 条比赛腿。请逐条搜索并绑定实际比赛，再核对玩法和SP。`;
   }
 
