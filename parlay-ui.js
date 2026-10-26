@@ -76,11 +76,13 @@
     if(!Number.isFinite(Number(pick.odds))||Number(pick.odds)<1)return false;
     if(sport==="basketball"){
       if(!BASKETBALL_MARKETS.includes(pick.market))return false;
-      if(pick.market==="basketball_handicap")return validBasketballLine(pick.handicap);
-      if(pick.market==="basketball_total")return validBasketballLine(pick.line);
-      return true;
+      if(!BASKETBALL_OPTIONS[pick.market]?.includes(pick.selection))return false;
+      if(pick.market==="basketball_handicap")return validBasketballLine(pick.handicap)&&pick.line==null;
+      if(pick.market==="basketball_total")return validBasketballLine(pick.line)&&pick.handicap==null;
+      return pick.handicap==null&&pick.line==null;
     }
     if(!FOOTBALL_MARKETS.includes(pick.market))return false;
+    if(!optionsFor(pick.market).includes(pick.selection))return false;
     return pick.market!=="handicap"||(Number.isInteger(Number(pick.handicap))&&Math.abs(Number(pick.handicap))<=9);
   }
 
@@ -126,8 +128,9 @@
       pickRows.forEach((pick,pickIndex)=>{
         const row=document.createElement("div");row.className="parlay-pick-row";
         const availableMarkets=marketOptionsFor(sport);if(!availableMarkets.includes(pick.market)){pick.market=defaultMarket(sport);pick.selection=optionsFor(pick.market)[0]||"";pick.handicap=null;pick.line=null}
+        const selectionOptions=optionsFor(pick.market);if(!selectionOptions.includes(pick.selection)){pick.selection=selectionOptions[0]||"";syncLegacySelection(leg)}
         const market=select(availableMarkets,pick.market);for(const option of market.options)option.textContent=MARKETS[option.value];market.onchange=()=>{pick.market=market.value;pick.selection=optionsFor(pick.market)[0]||"";pick.handicap=null;pick.line=null;renderLegs()};row.append(field("玩法",market));
-        const selection=select(optionsFor(pick.market),pick.selection);selection.onchange=()=>{pick.selection=selection.value;updateTotals()};row.append(field("投注项",selection));
+        const selection=select(selectionOptions,pick.selection);selection.onchange=()=>{pick.selection=selection.value;syncLegacySelection(leg);updateTotals()};row.append(field("投注项",selection));
         const odds=input("number",pick.odds,{min:"1",step:"0.001",placeholder:"SP"});odds.oninput=()=>{pick.odds=odds.value;syncLegacySelection(leg);updateTotals()};row.append(field("SP（票面赔率）",odds));
         if(pick.market==="handicap"){const handicap=input("number",pick.handicap,{min:"-9",max:"9",step:"1",placeholder:"让球"});handicap.oninput=()=>{pick.handicap=Number(handicap.value);syncLegacySelection(leg);updateTotals()};row.append(field("主队让球",handicap))}
         if(pick.market==="basketball_handicap"){const handicap=input("number",pick.handicap,{step:"0.5",placeholder:"如 -3.5"});handicap.oninput=()=>{pick.handicap=Number(handicap.value);syncLegacySelection(leg);updateTotals()};row.append(field("主队让分",handicap))}
