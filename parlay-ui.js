@@ -29,6 +29,15 @@
 
   const money = value => "¥" + Number(value || 0).toFixed(2);
   const roundTicket = value => Math.round(value * 100 + 1e-8) / 100;
+  const footballSelectionLabel = (market,selection) => market!=="match_result"&&market!=="handicap"?String(selection||"")
+    :["胜","主队胜"].includes(selection)?"主胜":["负","客队胜","主负"].includes(selection)?"客胜":String(selection||"");
+  const pickSelectionLabel = pick => footballSelectionLabel(pick.market,pick.selection);
+  const apiFootballSelection = (leg,pick) => {
+    if ((leg.sport||"football")==="basketball" || !["match_result","handicap"].includes(pick.market)) return pick.selection;
+    if (["主胜","主队胜","客负"].includes(pick.selection)) return "胜";
+    if (["客胜","客队胜","主负"].includes(pick.selection)) return "负";
+    return pick.selection==="平局"?"平":pick.selection;
+  };
   function ticketPicks(leg) { return Array.isArray(leg.selections)&&leg.selections.length?leg.selections:[leg]; }
   function ticketPickLine(pick) { return pick.market==="handicap"?`（让球 ${pick.handicap}）`:pick.market==="basketball_handicap"?`（让分 ${Number(pick.handicap)>0?"+":""}${pick.handicap}）`:pick.market==="basketball_total"?`（总分 ${pick.line}）`:""; }
   const field = (label, control) => { const box=document.createElement("label");box.className="parlay-field";box.append(document.createTextNode(label),control);return box; };
@@ -50,7 +59,8 @@
   function legTitle(leg,index) { return `第${index+1}腿${leg.home||leg.away?` · ${leg.home||"待绑定主队"} vs ${leg.away||"待绑定客队"}`:" · 尚未绑定比赛"}`; }
   function legSelections(leg) {
     if (!Array.isArray(leg.selections) || !leg.selections.length) {
-      leg.selections=[{market:leg.market||defaultMarket(leg.sport||"football"),selection:leg.selection||"胜",odds:leg.odds??"",handicap:leg.handicap??null,line:leg.line??null}];
+      const market=leg.market||defaultMarket(leg.sport||"football");
+      leg.selections=[{market,selection:leg.selection||optionsFor(market)[0]||"",odds:leg.odds??"",handicap:leg.handicap??null,line:leg.line??null}];
     }
     return leg.selections;
   }
@@ -233,7 +243,7 @@
       ctx.textAlign="center";ctx.fillStyle="#176348";ctx.font="800 15px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText("VS",center,y+60);
       ctx.textAlign="left";
       for(let pickIndex=0;pickIndex<Math.max(1,picks.length);pickIndex++){
-        const pick=picks[pickIndex],label=pick?`${pick.market_label||MARKETS[pick.market]||"投注项"}  ${pick.selection}${ticketPickLine(pick)}`:"未识别投注项",rowY=y+91+pickIndex*32;
+        const pick=picks[pickIndex],label=pick?`${pick.market_label||MARKETS[pick.market]||"投注项"}  ${pickSelectionLabel(pick)}${ticketPickLine(pick)}`:"未识别投注项",rowY=y+91+pickIndex*32;
         ctx.fillStyle="#f3f7f4";ctx.fillRect(x+18,rowY,contentWidth-36,27);ctx.fillStyle="#315344";ctx.font="600 13px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText(label,x+30,rowY+18,contentWidth-60);
       }
       y+=height+14;
@@ -263,12 +273,12 @@
     const totals=document.createElement("p");totals.className="notice";totals.textContent=`总投入 ${money(ticket.total_stake)}${ticket.declared_payout?` · 票面最高奖 ${money(ticket.declared_payout)}${ticket.payout_matches_ticket===false?"（与当前SP不符）":""}`:""} · 已确认返奖 ${money(ticket.payout)} · ${ticket.net===null?`待结算${ticket.max_possible_payout===null?"":`，最高可能返奖 ${money(ticket.max_possible_payout)}`}`:`净利润 ${ticket.net>=0?"+":""}${money(ticket.net)}`}`;box.append(totals);
     for(const leg of ticket.legs||[]){
       const picks=ticketPicks(leg),home=leg.home_cn?`${leg.home_cn} ${leg.home}`:leg.home,away=leg.away_cn?`${leg.away_cn} ${leg.away}`:leg.away;
-      const pickText=picks.map(pick=>`${pick.market_label||MARKETS[pick.market]||"玩法"} ${pick.selection}${ticketPickLine(pick)}${editing?"":` · SP ${Number(pick.odds).toFixed(3)}`} · ${pick.status_cn||leg.status_cn}`).join("；");
+      const pickText=picks.map(pick=>`${pick.market_label||MARKETS[pick.market]||"玩法"} ${pickSelectionLabel(pick)}${ticketPickLine(pick)}${editing?"":` · SP ${Number(pick.odds).toFixed(3)}`} · ${pick.status_cn||leg.status_cn}`).join("；");
       const row=document.createElement("p");row.className="parlay-ticket-leg";row.textContent=`${leg.league_code?leg.league_code.toUpperCase()+" · ":""}${home} ${leg.score||"VS"} ${away} · ${pickText}`;box.append(row);
       if(editing){
         let draft=parlayOddsDrafts.get(ticketKey)?.[leg.id];if(!draft){draft=picks.map(pick=>String(pick.odds));const all=parlayOddsDrafts.get(ticketKey)||{};all[leg.id]=draft;parlayOddsDrafts.set(ticketKey,all)}
         const editor=document.createElement("div");editor.className="parlay-odds-editor";
-        picks.forEach((pick,pickIndex)=>{const fieldRow=document.createElement("label");fieldRow.className="parlay-odds-row";const caption=document.createElement("span");caption.textContent=`${pick.market_label||MARKETS[pick.market]||"玩法"} ${pick.selection}${ticketPickLine(pick)}`;const odds=input("number",draft[pickIndex],{min:"1",step:"0.001","aria-label":caption.textContent+" SP"});odds.oninput=()=>{draft[pickIndex]=odds.value};fieldRow.append(caption,odds);editor.append(fieldRow)});
+        picks.forEach((pick,pickIndex)=>{const fieldRow=document.createElement("label");fieldRow.className="parlay-odds-row";const caption=document.createElement("span");caption.textContent=`${pick.market_label||MARKETS[pick.market]||"玩法"} ${pickSelectionLabel(pick)}${ticketPickLine(pick)}`;const odds=input("number",draft[pickIndex],{min:"1",step:"0.001","aria-label":caption.textContent+" SP"});odds.oninput=()=>{draft[pickIndex]=odds.value};fieldRow.append(caption,odds);editor.append(fieldRow)});
         box.append(editor);
       }
       const activation=document.createElement("p");activation.className="small";activation.textContent=leg.monitor_start_at?`首次激活监测（北京时间）：${core.formatKickoffBeijing(leg.monitor_start_at)}`:"首次激活监测时间：等待后台计划";box.append(activation);
@@ -276,7 +286,7 @@
     }
     const comboTable=document.createElement("div");comboTable.className="parlay-combinations";
     const table=document.createElement("table");table.className="parlay-combo-table";table.innerHTML="<thead><tr><th>过关组合</th><th>状态</th><th>投入</th><th>返奖</th></tr></thead>";
-    const body=document.createElement("tbody");for(const combo of ticket.combinations||[]){const tr=document.createElement("tr");for(const value of [`组合 ${combo.number}（${combo.legs.map(item=>`${item.home_cn||item.home}·${item.market_label||MARKETS[item.market]||"玩法"} ${item.selection}`).join(" + ")}）`,combo.status_cn,money(combo.stake),combo.payout===null?"待结算":money(combo.payout)]){const td=document.createElement("td");td.textContent=value;tr.append(td)}body.append(tr)}table.append(body);comboTable.append(table);box.append(comboTable);
+    const body=document.createElement("tbody");for(const combo of ticket.combinations||[]){const tr=document.createElement("tr");for(const value of [`组合 ${combo.number}（${combo.legs.map(item=>`${item.home_cn||item.home}·${item.market_label||MARKETS[item.market]||"玩法"} ${pickSelectionLabel(item)}`).join(" + ")}）`,combo.status_cn,money(combo.stake),combo.payout===null?"待结算":money(combo.payout)]){const td=document.createElement("td");td.textContent=value;tr.append(td)}body.append(tr)}table.append(body);comboTable.append(table);box.append(comboTable);
     const actions=document.createElement("div");actions.className="actions parlay-ticket-actions";
     const exportImage=document.createElement("button");exportImage.type="button";exportImage.className="subtle";exportImage.textContent="导出投注图片";exportImage.onclick=()=>createParlayTicketImage(ticket).catch(error=>alert(error.message));actions.append(exportImage);
     const editStatus=document.createElement("p");editStatus.className="small parlay-edit-status";editStatus.setAttribute("role","status");
@@ -313,7 +323,7 @@
       if(comboCount>5000)throw Error("该票展开后的注数超过5000注，当前无法安全创建监测。");
       if(total&&Math.abs(total-expected)>0.009)throw Error(`票面总金额为 ${money(total)}，按当前方式和倍数应为 ${money(expected)}。`);
       submitting=true;updateTotals();$("parlayError").textContent="正在创建过关监测…";
-      const result=await core.req("/api/parlays",{method:"POST",body:JSON.stringify({pass_type:$("parlayPassType").value,multiples,unit_stake:2,declared_total:total||expected,declared_payout:Number($("parlayDeclaredPayout").value)||null,legs:legs.map(leg=>{const picks=legSelections(leg).map(pick=>({market:pick.market,selection:pick.selection,odds:Number(pick.odds),...(["handicap","basketball_handicap"].includes(pick.market)?{handicap:Number(pick.handicap)}:{}),...(pick.market==="basketball_total"?{line:Number(pick.line)}:{})})),first=picks[0];return{fixture_id:leg.fixture_id,sport:leg.sport||"football",...(leg.sport==="basketball"?{league_code:leg.league_code||"nba"}:{}),...first,selections:picks}})})});
+      const result=await core.req("/api/parlays",{method:"POST",body:JSON.stringify({pass_type:$("parlayPassType").value,multiples,unit_stake:2,declared_total:total||expected,declared_payout:Number($("parlayDeclaredPayout").value)||null,legs:legs.map(leg=>{const picks=legSelections(leg).map(pick=>({market:pick.market,selection:apiFootballSelection(leg,pick),odds:Number(pick.odds),...(["handicap","basketball_handicap"].includes(pick.market)?{handicap:Number(pick.handicap)}:{}),...(pick.market==="basketball_total"?{line:Number(pick.line)}:{})})),first=picks[0];return{fixture_id:leg.fixture_id,sport:leg.sport||"football",...(leg.sport==="basketball"?{league_code:leg.league_code||"nba"}:{}),...first,selections:picks}})})});
       legs=[];bindingIndex=null;$("parlayError").textContent=result.resumed_fixture_ids?.length?`过关票已创建；已恢复 ${result.resumed_fixture_ids.length} 个共用比赛监测任务。`:"过关票已创建，赛果将由对应比赛监测任务自动更新。";renderLegs();await loadParlays();
     }catch(error){$("parlayError").textContent=error.message||String(error)}finally{submitting=false;updateTotals()}
   });

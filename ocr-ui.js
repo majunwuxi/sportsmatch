@@ -280,7 +280,8 @@
     }
     const tickets = picks.map((pick) => ({
       market: pick.market,
-      selection: pick.selection,
+      selection: ["match_result", "handicap"].includes(pick.market)
+        ? MatchMonitorOCR.normalizeFootballResultSelection(pick.selection) : pick.selection,
       stake: Number(pick.stake),
       odds: Number(pick.odds),
       ...(["handicap", "basketball_handicap"].includes(pick.market) ? { handicap: Number(pick.handicap) } : {}),

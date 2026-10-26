@@ -17,6 +17,7 @@
   function parseSelection(line) {
     const text = line.replace(/[“”"'`]/g, "");
     const basketballText=text.replace(/(?:赔率|SP|@)[^\s]*/ig,"");
+    const footballResult = value => normalizeFootballSelection("match_result",value);
     let match=basketballText.match(/(?:竞彩篮球|篮球)\s*胜分差\s*[:：]?\s*(主胜|主队胜|客胜|客队胜)\s*(1-5|6-10|11-15|16-20|21-25|26\+|26分以上|26分及以上)\s*分?/);
     if(match){const side=/客/.test(match[1])?"客胜":"主胜",band=match[2].startsWith("26")?"26+":match[2];return{market:"basketball_margin",selection:side+band+"分",sport:"basketball"}}
     match=basketballText.match(/(?:竞彩篮球|篮球)\s*(?:大小分|大小|总分)\s*[:：]?\s*(大|小)\s*([0-9]+(?:\.5)?)/);
@@ -35,10 +36,10 @@
     if (match) return {market: "total_goals", selection: match[1]};
     match = text.match(/(?:让球|让球胜平负)\s*([+-]?\d+)\s*(胜|平|负)/);
     if (match) return {market: "handicap", selection: match[2], handicap: Number(match[1])};
-    match = text.match(/(?:主胜|主队胜|客胜|客队胜|胜|平局|平|负|客负)/);
+    match = text.match(/(?:主队胜|客队胜|主胜|客胜|主负|客负|胜|平局|平|负)/);
     if (!match) return null;
     const word = match[0];
-    const selection = /主胜|主队胜|(?<!客)胜/.test(word) ? "胜" : /平/.test(word) ? "平" : "负";
+    const selection = footballResult(word);
     return {market: "match_result", selection};
   }
 
@@ -107,7 +108,7 @@
         ...(leg.league_code ? {league_code:leg.league_code} : {}),
         selections: (leg.selections || []).map(pick => ({
           market: pick.market,
-          selection: pick.selection,
+          selection: normalizeFootballSelection(pick.market,pick.selection),
           odds: finite(pick.odds) ? Number(pick.odds) : null,
           handicap: finite(pick.handicap) ? Number(pick.handicap) : null,
           line: finite(pick.line) ? Number(pick.line) : null,
@@ -115,6 +116,15 @@
       })),
       warnings: (receipt.warnings || []).map(String),
     };
+  }
+
+  function normalizeFootballSelection(market, value) {
+    if (market !== "match_result" && market !== "handicap") return value;
+    const raw = String(value || "").trim();
+    if (/^平(?:局)?$/.test(raw)) return "平";
+    if (["客胜","客队胜","负","主负"].includes(raw)) return "客胜";
+    if (["主胜","主队胜","胜","客负"].includes(raw)) return "主胜";
+    return raw;
   }
 
   function parseParlayImport(raw) {
@@ -130,10 +140,11 @@
     const sport = data.sport === "basketball" ? "basketball" : "football";
     const warnings = Array.isArray(data.warnings) ? data.warnings.filter(item => typeof item === "string") : [];
     const legs = data.legs.map((leg, index) => {
+      const legSport = leg?.sport === "basketball" || sport === "basketball" ? "basketball" : "football";
       const sourceSelections = Array.isArray(leg?.selections) ? leg.selections : [];
       const selections = sourceSelections.map(pick => ({
-        market:String(pick?.market || leg?.market || (sport === "basketball" ? "basketball_result" : "match_result")),
-        selection:String(pick?.selection || ""),
+        market:String(pick?.market || leg?.market || (legSport === "basketball" ? "basketball_result" : "match_result")),
+        selection:normalizeFootballSelection(String(pick?.market || leg?.market || (legSport === "basketball" ? "basketball_result" : "match_result")),String(pick?.selection || "")),
         odds:finite(pick?.odds) ? String(pick.odds) : "",
         handicap:finite(pick?.handicap) ? Number(pick.handicap) : null,
         line:finite(pick?.line) ? Number(pick.line) : null,
@@ -141,8 +152,8 @@
       if (!String(leg?.home || "").trim() || !String(leg?.away || "").trim()) warnings.push(`第${index + 1}场缺少主队或客队名称，请核对JSON。`);
       if (!selections.length) {
         const pick = {
-          market:String(leg?.market || (sport === "basketball" ? "basketball_result" : "match_result")),
-          selection:String(leg?.selection || ""),
+          market:String(leg?.market || (legSport === "basketball" ? "basketball_result" : "match_result")),
+          selection:normalizeFootballSelection(String(leg?.market || (legSport === "basketball" ? "basketball_result" : "match_result")),String(leg?.selection || "")),
           odds:finite(leg?.odds) ? String(leg.odds) : "",
           handicap:finite(leg?.handicap) ? Number(leg.handicap) : null,
           line:finite(leg?.line) ? Number(leg.line) : null,
@@ -151,10 +162,10 @@
       }
       return {
         home:String(leg?.home || "").trim(), away:String(leg?.away || "").trim(),
-        sport:leg?.sport === "basketball" || sport === "basketball" ? "basketball" : "football",
+        sport:legSport,
         ...(leg?.league_code ? {league_code:String(leg.league_code)} : {}),
         market:selections[0]?.market || String(leg?.market || (sport === "basketball" ? "basketball_result" : "match_result")),
-        selection:selections[0]?.selection || String(leg?.selection || ""),
+        selection:selections[0]?.selection || normalizeFootballSelection(String(leg?.market || (legSport === "basketball" ? "basketball_result" : "match_result")),String(leg?.selection || "")),
         odds:selections[0]?.odds ?? (finite(leg?.odds) ? String(leg.odds) : ""),
         handicap:selections[0]?.handicap ?? (finite(leg?.handicap) ? Number(leg.handicap) : null),
         line:selections[0]?.line ?? (finite(leg?.line) ? Number(leg.line) : null),
@@ -248,7 +259,8 @@
       const pattern = /(?:主队胜|客队胜|主胜|客胜|主负|客负|胜|平|负)\s*[（(]\s*(\d{1,3}(?:\.\d{1,4})?)/g;
       while ((match = pattern.exec(block))) {
         const raw = match[0].match(/主队胜|客队胜|主胜|客胜|主负|客负|胜|平|负/)[0];
-        const selection = /平/.test(raw) ? "平" : /客/.test(raw) || /主负/.test(raw) ? "负" : "胜";
+        const selection = market === "match_result" ? normalizeFootballSelection(market,raw)
+          : /平/.test(raw) ? "平" : /客/.test(raw) || /主负/.test(raw) ? "负" : "胜";
         add(selection, match[1]);
       }
     } else if (market === "total_goals") {
@@ -275,7 +287,8 @@
       const line = lineMatch ? Number(lineMatch[1]) : null;
       const pattern = /(主队胜|客队胜|主胜|客胜|主负|客负|胜|平|负)\s*[（(]\s*(\d{1,3}(?:\.\d{1,4})?)/g;
       while ((match = pattern.exec(block))) {
-        const raw = match[1], selection = /平/.test(raw) ? "平" : /客/.test(raw) || /主负/.test(raw) ? "负" : "胜";
+        const raw = match[1], selection = market === "handicap" ? normalizeFootballSelection(market,raw)
+          : /平/.test(raw) ? "平" : /客/.test(raw) || /主负/.test(raw) ? "负" : "胜";
         add(selection, match[2], market === "basketball_handicap" ? {handicap:line} : {handicap:line});
       }
     }

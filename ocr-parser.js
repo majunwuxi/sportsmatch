@@ -17,7 +17,7 @@
     row.map((score, columnIndex) => [score, { row: rowIndex, column: columnIndex }])));
   const scoreOptions = new Set([...listedScoreOptions,
     "胜其他", "平其他", "负其他", "胜其它", "平其它", "负其它"]);
-  const resultOptions = new Set(["胜", "平", "负"]);
+  const resultOptions = new Set(["主胜", "平", "客胜", "主队胜", "客队胜", "主负", "客负", "胜", "负"]);
   const halfFullOptions = new Set(["胜胜", "胜平", "胜负", "平胜", "平平", "平负", "负胜", "负平", "负负"]);
   const totalGoalOptions = new Set(["0", "1", "2", "3", "4", "5", "6", "7+"]);
   const basketballResultOptions = new Set(["胜", "负"]);
@@ -38,6 +38,14 @@
       .replace(/[＠]/g, "@")
       .replace(/[\s\u200b\ufeff]/g, "")
       .trim();
+  }
+
+  function normalizeFootballResultSelection(value) {
+    const raw = normalize(value);
+    if (["平","平局"].includes(raw)) return "平";
+    if (["客胜","客队胜","负","主负"].includes(raw)) return "客胜";
+    if (["主胜","主队胜","胜","客负"].includes(raw)) return "主胜";
+    return raw;
   }
 
   function basketballMarginSelection(value) {
@@ -263,12 +271,12 @@
     if (scoreOptions.has(text)) return { market: "correct_score", selection: text, handicap: null };
     if (halfFullOptions.has(text)) return { market: "half_full", selection: text, handicap: null };
     if (section === "total_goals" && totalGoalOptions.has(text)) return { market: "total_goals", selection: text, handicap: null };
-    if (["主胜", "客胜", "胜", "平", "负"].includes(text)) {
+    if (["主胜", "客胜", "主队胜", "客队胜", "主负", "客负", "胜", "平局", "平", "负"].includes(text)) {
       const localLines = groupLines(words, height).filter((line) => Math.abs(line.cy - getBox(label).cy) < Math.max(22, height * 0.04));
       const hasHandicapMarker = localLines.some((line) => /让球/.test(line.text));
       const market = section === "handicap" || hasHandicapMarker ? "handicap" : section === "match_result" ? "match_result" : null;
       if (!market) return null;
-      const selection = text === "主胜" ? "胜" : text === "客胜" ? "负" : text;
+      const selection = normalizeFootballResultSelection(text);
       return { market, selection, handicap: market === "handicap" ? inferHandicap(label, words, height) : null };
     }
     return null;
@@ -355,8 +363,9 @@
   }
 
   function validatePick(pick) {
-    const selection = normalize(pick?.selection);
     const market = pick?.market;
+    const selection = market === "match_result" || market === "handicap"
+      ? normalizeFootballResultSelection(pick?.selection) : normalize(pick?.selection);
     const allowed = market === "correct_score" ? scoreOptions
       : market === "match_result" || market === "handicap" ? resultOptions
       : market === "total_goals" ? totalGoalOptions
@@ -763,7 +772,7 @@
     if (market === "half_full") return halfFullOptions.has(value);
     if (market === "total_goals") return totalGoalOptions.has(value);
     if (market === "match_result" || market === "handicap") {
-      return ["胜", "平", "负", "主胜", "客胜"].includes(value);
+      return ["胜", "平", "负", "主胜", "客胜", "主队胜", "客队胜", "主负", "客负", "平局"].includes(value);
     }
     if (market === "basketball_result" || market === "basketball_handicap") {
       return ["胜", "负", "主胜", "客胜", "主负", "客负"].includes(value);
@@ -938,7 +947,7 @@
     }
     if (tokens.some((word) => totalGoalOptions.has(normalize(word.text)))) return "total_goals";
     if (tokens.some((word) => basketballTotalOptions.has(normalize(word.text)))) return "basketball_total";
-    if (tokens.some((word) => ["主胜", "客胜", "胜", "平", "负"].includes(normalize(word.text)))) return "match_result";
+    if (tokens.some((word) => ["主胜", "客胜", "主队胜", "客队胜", "主负", "客负", "胜", "平局", "平", "负"].includes(normalize(word.text)))) return "match_result";
     return null;
   }
 
@@ -1006,5 +1015,5 @@
     return data;
   }
 
-  root.MatchMonitorOCR = { parse, parseSelectedRegions, parseScoreGridCells, parseBasketballTicket, preferScoreOdds, preprocessScoreOddsPixels, inferScoreGrid, scoreGridRows, scoreSelectedCrop, marketAt, validatePick, normalize, listedScoresFromRows, parseListedScores, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels, paddleWordsFromResult };
+  root.MatchMonitorOCR = { parse, parseSelectedRegions, parseScoreGridCells, parseBasketballTicket, preferScoreOdds, preprocessScoreOddsPixels, inferScoreGrid, scoreGridRows, scoreSelectedCrop, marketAt, validatePick, normalize, normalizeFootballResultSelection, listedScoresFromRows, parseListedScores, detectSelectedRegions, containsSelectedRegion, hasSelectionLabel, selectionLabelConfidence, mergeSelectedRegionWords, invertGrayPixels, paddleWordsFromResult };
 })(globalThis);

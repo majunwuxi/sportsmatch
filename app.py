@@ -39,6 +39,8 @@ MARKETS={"correct_score":"比分","match_result":"胜平负","handicap":"让球�
     "basketball_total":"竞彩篮球大小分","basketball_margin":"竞彩篮球胜分差"}
 BASKETBALL_MARKETS={"basketball_result","basketball_handicap","basketball_total","basketball_margin"}
 RESULTS={"胜","平","负"}
+FOOTBALL_RESULT_SELECTIONS={"主胜","平","客胜"}
+FOOTBALL_RESULT_ALIASES={"胜":"主胜","负":"客胜","主队胜":"主胜","客队胜":"客胜","平局":"平","主负":"客胜","客负":"主胜"}
 HALF_FULL={a+b for a in RESULTS for b in RESULTS}
 TOTAL_GOALS={"0","1","2","3","4","5","6","7+"}
 STATUS_CN={"TBD":"待定","NS":"未开赛","1H":"上半场","HT":"中场休息","2H":"下半场","ET":"加时赛","BT":"加时赛休息","P":"点球大战","SUSP":"暂停","INT":"中断","FT":"完场","AET":"加时赛结束","PEN":"点球结束","PST":"延期","CANC":"已取消","ABD":"比赛中止","AWD":"判定赛果","WO":"弃权"}
@@ -304,6 +306,13 @@ def notify(message):
 def score_result(home,away):
     return "胜" if home>away else "负" if home<away else "平"
 
+def normalize_football_result_selection(value):
+    raw=str(value or "").strip().replace(" ","").replace("　","")
+    return FOOTBALL_RESULT_ALIASES.get(raw,raw)
+
+def football_result_value(value):
+    return {"主胜":"胜","平":"平","客胜":"负"}.get(normalize_football_result_selection(value))
+
 def score_category(home,away,listed_scores=None):
     score=f"{home}:{away}"
     exact_scores=LISTED_SCORE_OPTIONS if listed_scores is None else set(listed_scores)
@@ -331,8 +340,8 @@ def ticket_matches(ticket,home,away,half_home=None,half_away=None,listed_scores=
     market=ticket.get("market","correct_score")
     selection=ticket["selection"]
     if market=="correct_score": return OTHER_SCORE_ALIASES.get(selection,selection)==score_category(home,away,listed_scores)
-    if market=="match_result": return selection==score_result(home,away)
-    if market=="handicap": return selection==score_result(home+int(ticket["handicap"]),away)
+    if market=="match_result": return football_result_value(selection)==score_result(home,away)
+    if market=="handicap": return football_result_value(selection)==score_result(home+int(ticket["handicap"]),away)
     if market=="total_goals": return selection==("7+" if home+away>=7 else str(home+away))
     if market=="half_full":
         if half_home is None or half_away is None: return None
@@ -627,14 +636,15 @@ def validate_tickets(items,sport="football"):
     for t in items:
         allowed=BASKETBALL_MARKETS if sport=="basketball" else soccer_markets
         if t.market not in allowed: raise HTTPException(422,f"Unsupported {sport} market: {t.market}")
+        selection=normalize_football_result_selection(t.selection) if sport=="football" and t.market in {"match_result","handicap"} else t.selection
         if sport=="basketball":
             if t.market=="basketball_result":valid=t.selection in {"胜","负"} and t.handicap is None and t.line is None
             elif t.market=="basketball_handicap":valid=t.selection in {"胜","负"} and t.handicap is not None and is_half_point_line(t.handicap) and t.line is None
             elif t.market=="basketball_total":valid=t.selection in {"大","小"} and t.line is not None and is_half_point_line(t.line) and t.handicap is None
             else:valid=normalize_basketball_margin_selection(t.selection) is not None and t.handicap is None and t.line is None
         else:
-            valid={"correct_score":t.selection in SCORES,"match_result":t.selection in RESULTS,
-                "handicap":t.selection in RESULTS and t.handicap is not None and t.handicap.is_integer() and -9<=t.handicap<=9 and t.line is None,
+            valid={"correct_score":t.selection in SCORES,"match_result":selection in FOOTBALL_RESULT_SELECTIONS,
+                "handicap":selection in FOOTBALL_RESULT_SELECTIONS and t.handicap is not None and t.handicap.is_integer() and -9<=t.handicap<=9 and t.line is None,
                 "total_goals":t.selection in TOTAL_GOALS and t.handicap is None and t.line is None,
                 "half_full":t.selection in HALF_FULL and t.handicap is None and t.line is None}[t.market]
         if not valid: raise HTTPException(422,f"Invalid selection for {MARKETS[t.market]}: {t.selection}")
@@ -643,6 +653,7 @@ def validate_tickets(items,sport="football"):
     for t in items:
         row=t.model_dump(exclude_none=True)
         if sport=="basketball" and t.market=="basketball_margin":row["selection"]=normalize_basketball_margin_selection(t.selection)
+        if sport=="football" and t.market in {"match_result","handicap"}:row["selection"]=normalize_football_result_selection(t.selection)
         if sport=="football" and t.market=="handicap":row["handicap"]=int(t.handicap)
         result.append(row)
     return result
