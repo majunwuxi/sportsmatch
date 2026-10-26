@@ -876,12 +876,15 @@
         const amountText = Number.isFinite(basketballTicket.totalStake)
           ? "票面合计 " + money(basketballTicket.totalStake) + "，已按识别项目分配金额。"
           : "未识别到票面合计金额，请手动填写金额。";
+        const payoutText = Number.isFinite(basketballTicket.maxPayout)
+          ? "票面最高可能返奖 " + money(basketballTicket.maxPayout) + "。"
+          : "";
         const issueText = (basketballTicket.issueNumber ? "第" + basketballTicket.issueNumber + "期。" : "")
           + (basketballTicket.issue ? basketballTicket.issue + "。" : "");
         setOcrStatus(engineStatus + "识别到竞彩篮球纸质票。" + issueText + fixtureText
           + (parsedPicks.length
             ? "识别到 " + parsedPicks.length + " 项 " + (MARKETS[basketballTicket.market] || "篮球投注") + "；"
-              + amountText + "请对照纸票核对球队、选项、SP和金额。"
+              + amountText + payoutText + "请对照纸票核对球队、选项、SP和金额。"
             : issueText + amountText + "尚未识别到可用选项。请核对票面格式，或手动录入投注。"), !parsedPicks.length);
       } else setOcrStatus(engineStatus + (parsedPicks.length
         ? highlighted

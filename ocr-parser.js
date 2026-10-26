@@ -439,6 +439,8 @@
     const parsedOptions = [...unique.values()];
     const totalMatch = text.match(/合计(?:金额)?(\d+(?:\.\d+)?)元/);
     const totalStake = totalMatch ? Number(totalMatch[1]) : null;
+    const payoutMatch = text.match(/(?:本票)?最高(?:可能)?(?:固定)?(?:奖金|返奖)[:：]?(\d+(?:\.\d+)?)元/);
+    const maxPayout = payoutMatch ? Number(payoutMatch[1]) : null;
     const perOptionStake = Number.isFinite(totalStake) && parsedOptions.length ? totalStake / parsedOptions.length : 0;
     const fixtureMatch = text.match(/客队[:：]?(.+?)(?:vs|v)主队[:：]?(.+?)(?=第\d+场|[（(]|$)/i);
     const fixture = fixtureMatch ? { away: fixtureMatch[1], home: fixtureMatch[2] } : null;
@@ -460,7 +462,7 @@
       unrecognized: false,
       position: { x: option.position?.x ?? 0, y: Math.round(height * (0.55 + index * 0.03)) },
     }));
-    return { matched: true, market, picks, totalStake, fixture, issueNumber: issueMatch?.[1] || null,
+    return { matched: true, market, picks, totalStake, maxPayout, fixture, issueNumber: issueMatch?.[1] || null,
       issue: parsedOptions.length ? null : "未能从票面找到带 SP 的篮球选项" };
   }
 

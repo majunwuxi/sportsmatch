@@ -62,11 +62,13 @@ test('parses a photographed Chinese basketball winning-margin receipt locally', 
     away: '印第安纳步行者', home: '布鲁克林篮网',
   });
   assert.equal(result.totalStake, 2);
+  assert.equal(result.maxPayout, 9.6);
   assert.deepEqual(JSON.parse(JSON.stringify(result.picks.map(({ market, selection, odds, stake, enabled }) => ({ market, selection, odds, stake, enabled })))), [{
     market: 'basketball_margin', selection: '客胜11-15分', odds: 4.8, stake: 2, enabled: true,
   }]);
   assert.deepEqual(JSON.parse(JSON.stringify(parser.validatePick(result.picks[0]))), { ok: true, reason: '有效' });
   assert.match(uiSource, /basketballTicket\.fixture\.away/);
+  assert.match(uiSource, /basketballTicket\.maxPayout/);
   assert.match(uiSource, /篮球纸质票识别/);
   assert.doesNotMatch(uiSource, /FormData|fetch\(screenshotFile/);
 });
