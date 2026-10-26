@@ -29,6 +29,49 @@ def test_outcome(score,selection):
     r=m.outcome(*score,[{'selection':selection,'stake':2,'odds':1.23}]);assert r['selection']==selection and r['payout']==2.46 and r['net']==.46 and r['total']==2.0
     assert r['tickets'][0]['won'] is True and r['tickets'][0]['share_pct']==100
 
+@pytest.mark.parametrize('selection,expected', [('主胜','主胜'),('客胜','客胜'),('胜','主胜'),('负','客胜')])
+def test_basketball_result_uses_home_and_away_sides(selection,expected):
+    tickets=m.validate_tickets([m.Ticket(market='basketball_result',selection=selection,stake=2,odds=1.5)],sport='basketball')
+    assert tickets[0]['selection']==expected
+    winning_score=(110,100) if expected=='主胜' else (100,110)
+    losing_score=winning_score[::-1]
+    assert m.ticket_matches(tickets[0],*winning_score) is True
+    assert m.ticket_matches(tickets[0],*losing_score) is False
+    assert m.ticket_matches(tickets[0],100,100) is None
+
+def test_basketball_handicap_applies_signed_home_adjustment_and_total_return():
+    tickets=m.validate_tickets([
+        m.Ticket(market='basketball_result',selection='主胜',stake=2,odds=1.5),
+        m.Ticket(market='basketball_handicap',selection='客胜',handicap=-4.5,stake=2,odds=4.8),
+    ],sport='basketball')
+    result=m.outcome(110,106,tickets)
+    assert [ticket['won'] for ticket in result['tickets']]==[True,True]
+    assert result['payout']==12.6 and result['net']==8.6
+    assert m.ticket_matches({'market':'basketball_handicap','selection':'主胜','handicap':-3.5},110,106) is True
+    assert m.ticket_matches({'market':'basketball_handicap','selection':'客胜','handicap':-4.5},110,106) is True
+    assert m.ticket_matches({'market':'basketball_handicap','selection':'主胜','handicap':3.5},100,102) is True
+
+def test_basketball_does_not_accept_draw_selection():
+    with pytest.raises(m.HTTPException) as error:
+        m.validate_tickets([m.Ticket(market='basketball_result',selection='平',stake=2,odds=3)],sport='basketball')
+    assert error.value.status_code==422
+
+def test_basketball_parlay_settles_canonical_home_and_away_picks():
+    parent={'id':1,'pass_type':'2串1','multiples':1,'unit_stake':2,'total_stake':2,'declared_payout':9.6}
+    legs=[
+        {'id':1,'leg_index':0,'fixture_id':101,'sport':'basketball','league_code':'nba','home':'Home A','away':'Away A',
+         'market':'basketball_result','selection':'主胜','odds':'1.50','void_confirmed':0},
+        {'id':2,'leg_index':1,'fixture_id':102,'sport':'basketball','league_code':'nba','home':'Home B','away':'Away B',
+         'market':'basketball_result','selection':'客胜','odds':'3.20','void_confirmed':0},
+    ]
+    tasks={101:{'status':'finished','settlement_score':'110:106','last_score':'110:106','provider_status':'final|已完赛'},
+        102:{'status':'finished','settlement_score':'100:102','last_score':'100:102','provider_status':'final|已完赛'}}
+    won=m.evaluate_parlay(parent,legs,tasks)
+    assert won['status']=='won' and won['payout']==9.6 and won['combinations'][0]['state']=='won'
+    tasks[102]['settlement_score']=tasks[102]['last_score']='102:100'
+    lost=m.evaluate_parlay(parent,legs,tasks)
+    assert lost['status']=='lost' and lost['payout']==0 and lost['combinations'][0]['state']=='lost'
+
 def test_other_character_spelling_is_valid_and_settles_like_other_score():
     tickets=m.validate_tickets([m.Ticket(market='correct_score',selection='负其它',stake=2,odds=2.5)])
     result=m.outcome(0,6,tickets)
@@ -468,6 +511,31 @@ def test_cancel_review(client,monkeypatch):
     t=task(client,monkeypatch);monkeypatch.setattr(m,'api',lambda *a:[fixture('CANC')]);m.tick(t)
     with m.conn() as c:assert c.execute('SELECT status FROM tasks').fetchone()[0]=='review_required'
 
+def test_tied_final_basketball_score_requires_manual_review(client,monkeypatch):
+    created=task(client,monkeypatch)
+    fixture_id=m.BALLDONTLIE_GAME_ID_BASE['nba']+12345
+    with m.conn() as c:
+        c.execute("UPDATE tasks SET fixture_id=?,sport='basketball',league_code='nba',provider_game_id='12345',home=?,away=?,ticket_json=? WHERE id=?",
+            (fixture_id,'Los Angeles Lakers','Brooklyn Nets',m.json.dumps([
+                {'market':'basketball_result','selection':'主胜','stake':2,'odds':1.8},
+                {'market':'basketball_total','selection':'大','line':190.5,'stake':2,'odds':1.9}]),created['id']))
+        basketball_task=dict(c.execute('SELECT * FROM tasks WHERE id=?',(created['id'],)).fetchone())
+    notices=[]
+    monkeypatch.setattr(m,'balldontlie_api',lambda *args,**kwargs:{'data':{
+        'id':12345,'home_team':{'full_name':'Los Angeles Lakers'},'visitor_team':{'full_name':'Brooklyn Nets'},
+        'status':'Final','status_state':'final','home_team_score':100,'visitor_team_score':100,
+        'datetime':'2026-10-25T19:00:00Z'}})
+    monkeypatch.setattr(m,'notify',lambda message:notices.append(message))
+    monkeypatch.setattr(m,'sync_parlays_for_fixture',lambda *_:None)
+    m._tick_basketball(basketball_task)
+    with m.conn() as c:
+        row=c.execute('SELECT status,settlement_score,finished_at FROM tasks WHERE id=?',(created['id'],)).fetchone()
+    assert tuple(row)==('review_required','100:100',None)
+    assert any('终场比分为平局' in message for message in notices)
+    settlement=client.get('/api/tasks',auth=('test','test-password')).json()[0]['settlement']
+    assert settlement['payout']==0 and settlement['net'] is None and settlement['pending_tickets']==2
+    assert all(ticket['won'] is None for ticket in settlement['tickets'])
+
 def test_ticket_validation(client,monkeypatch):
     create(client,monkeypatch)
     for ticket in [{'selection':'胜其他','stake':3,'odds':2},{'selection':'bad','stake':2,'odds':2},
@@ -606,8 +674,8 @@ def test_index_contains_simulator_and_no_old_score_calculator():
     assert '<th>过关组合</th>' in parlay_ui
     assert '`组合 ${combo.number}（' in parlay_ui
     assert '第${combo.number}注' not in parlay_ui
-    assert 'leg.state==="won"||leg.state==="lost"' in parlay_ui
-    assert 'parlay-result-badge parlay-result-${leg.state}' in parlay_ui
+    assert 'pick.state==="won"||pick.state==="lost"' in parlay_ui
+    assert 'parlay-result-badge parlay-result-${pick.state}' in parlay_ui
     assert '.parlay-result-won{background:#c62828;color:#fff}' in html
     assert '.parlay-result-lost{background:#111;color:#fff}' in html
     assert 'id="ocrBudget"' in html and 'ocr-balance-row' in html

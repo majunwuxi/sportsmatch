@@ -140,8 +140,8 @@ test('parlay parser reads the example 2串一 ticket into two reviewable fixture
  const response=await worker.fetch(req('/parlay-parser.js'),{});assert.equal(response.status,200);const context={};vm.runInNewContext(await response.text(),context);
  const result=context.MatchMonitorParlayParser.parseParlayText('投注方式：2串1，5倍投注，合计花费 **10元**。\n第1场：国际米兰 VS 佛罗伦萨，买的是“主胜”，赔率 1.220。\n第2场：巴塞罗那 VS 皇家马德里，买的是“主胜”，赔率 1.530。\n最高奖金：18.65元。');
  assert.equal(result.passType,'2串1');assert.equal(result.multiples,5);assert.equal(result.total,10);assert.equal(result.payout,18.65);const normalized=JSON.parse(JSON.stringify(result.legs.map(({home,away,market,selection,odds,fixture_id})=>({home,away,market,selection,odds,fixture_id}))));assert.deepEqual(normalized,[
-  {home:'国际米兰',away:'佛罗伦萨',market:'match_result',selection:'胜',odds:1.22,fixture_id:null},
-  {home:'巴塞罗那',away:'皇家马德里',market:'match_result',selection:'胜',odds:1.53,fixture_id:null}
+  {home:'国际米兰',away:'佛罗伦萨',market:'match_result',selection:'主胜',odds:1.22,fixture_id:null},
+  {home:'巴塞罗那',away:'皇家马德里',market:'match_result',selection:'主胜',odds:1.53,fixture_id:null}
  ]);
 });
 
@@ -167,6 +167,6 @@ test('parlay API proxy requires an authenticated Site visitor and allows only sc
  }finally{globalThis.fetch=old}
 });
 test('parlay table names generated rows as combinations instead of bets',async()=>{const source=await (await worker.fetch(req('/parlay-ui.js'),{})).text();assert.match(source,/<th>过关组合<\/th>/);assert.match(source,/组合 \$\{combo\.number\}/);assert.doesNotMatch(source,/第\$\{combo\.number\}注/) });
-test('settled parlay leg outcomes use red and black badges with white text',async()=>{const [html,source]=await Promise.all([worker.fetch(req('/')).then(response=>response.text()),worker.fetch(req('/parlay-ui.js')).then(response=>response.text())]);assert.match(source,/leg\.state==="won"\|\|leg\.state==="lost"/);assert.match(source,/parlay-result-badge parlay-result-\$\{leg\.state\}/);assert.match(source,/result\.textContent=leg\.status_cn/);assert.match(html,/\.parlay-result-won\{background:#c62828;color:#fff\}/);assert.match(html,/\.parlay-result-lost\{background:#111;color:#fff\}/)});
+test('settled parlay picks use red and black badges with white text',async()=>{const [html,source]=await Promise.all([worker.fetch(req('/')).then(response=>response.text()),worker.fetch(req('/parlay-ui.js')).then(response=>response.text())]);assert.match(source,/pick\.state==="won"\|\|pick\.state==="lost"/);assert.match(source,/parlay-result-badge parlay-result-\$\{pick\.state\}/);assert.match(source,/result\.textContent=pick\.status_cn/);assert.match(html,/\.parlay-result-won\{background:#c62828;color:#fff\}/);assert.match(html,/\.parlay-result-lost\{background:#111;color:#fff\}/)});
 
 test('finished winning task cards show the total payout in a bubble',async()=>{const html=await (await worker.fetch(req('/'))).text();assert.ok(html.includes('t.status==="finished"&&taskPayout>0&&(t.settlement?.tickets||[]).some(ticket=>ticket.won===true)'));assert.ok(html.includes('payoutBubble.textContent="返奖总额 "+money(taskPayout)'));assert.ok(html.includes('.task-payout-bubble{display:inline-flex;align-items:center;border-radius:999px'))});

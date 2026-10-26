@@ -40,8 +40,8 @@ test('classifies all supported markets and infers handicap rows', () => {
     { market: 'correct_score', selection: '胜其他', handicap: null, odds: 23 },
     { market: 'total_goals', selection: '7+', handicap: null, odds: 21 },
     { market: 'half_full', selection: '负平', handicap: null, odds: 14 },
-    { market: 'handicap', selection: '胜', handicap: -1, odds: 5.05 },
-    { market: 'match_result', selection: '负', handicap: null, odds: 2.45 },
+    { market: 'handicap', selection: '主胜', handicap: -1, odds: 5.05 },
+    { market: 'match_result', selection: '客胜', handicap: null, odds: 2.45 },
   ]));
 });
 

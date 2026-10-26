@@ -277,8 +277,16 @@
     const totals=document.createElement("p");totals.className="notice";totals.textContent=`总投入 ${money(ticket.total_stake)}${ticket.declared_payout?` · 票面最高奖 ${money(ticket.declared_payout)}${ticket.payout_matches_ticket===false?"（与当前SP不符）":""}`:""} · 已确认返奖 ${money(ticket.payout)} · ${ticket.net===null?`待结算${ticket.max_possible_payout===null?"":`，最高可能返奖 ${money(ticket.max_possible_payout)}`}`:`净利润 ${ticket.net>=0?"+":""}${money(ticket.net)}`}`;box.append(totals);
     for(const leg of ticket.legs||[]){
       const picks=ticketPicks(leg),home=leg.home_cn?`${leg.home_cn} ${leg.home}`:leg.home,away=leg.away_cn?`${leg.away_cn} ${leg.away}`:leg.away;
-      const pickText=picks.map(pick=>`${pick.market_label||MARKETS[pick.market]||"玩法"} ${pickSelectionLabel(pick)}${ticketPickLine(pick)}${editing?"":` · SP ${Number(pick.odds).toFixed(3)}`} · ${pick.status_cn||leg.status_cn}`).join("；");
-      const row=document.createElement("p");row.className="parlay-ticket-leg";row.textContent=`${leg.league_code?leg.league_code.toUpperCase()+" · ":""}${home} ${leg.score||"VS"} ${away} · ${pickText}`;box.append(row);
+      const row=document.createElement("p");row.className="parlay-ticket-leg";
+      row.append(document.createTextNode(`${leg.league_code?leg.league_code.toUpperCase()+" · ":""}${home} ${leg.score||"VS"} ${away} · `));
+      picks.forEach((pick,pickIndex)=>{
+        if(pickIndex)row.append(document.createTextNode("；"));
+        row.append(document.createTextNode(`${pick.market_label||MARKETS[pick.market]||"玩法"} ${pickSelectionLabel(pick)}${ticketPickLine(pick)}${editing?"":` · SP ${Number(pick.odds).toFixed(3)}`} · `));
+        if(pick.state==="won"||pick.state==="lost"){
+          const result=document.createElement("span");result.className=`parlay-result-badge parlay-result-${pick.state}`;result.textContent=pick.status_cn||"";row.append(result);
+        }else row.append(document.createTextNode(pick.status_cn||leg.status_cn||"等待赛果"));
+      });
+      box.append(row);
       if(editing){
         let draft=parlayOddsDrafts.get(ticketKey)?.[leg.id];if(!draft){draft=picks.map(pick=>String(pick.odds));const all=parlayOddsDrafts.get(ticketKey)||{};all[leg.id]=draft;parlayOddsDrafts.set(ticketKey,all)}
         const editor=document.createElement("div");editor.className="parlay-odds-editor";

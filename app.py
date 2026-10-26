@@ -433,7 +433,8 @@ def _tick_basketball(task):
         score=f"{int(home_score)}:{int(away_score)}"
     if state=="final" and score is None:raise RuntimeError(f"Final {league_code.upper()} game has no final score")
     closed=state=="final"
-    requires_review=state in {"canceled","abandoned"}
+    tied_final=state=="final" and int(home_score)==int(away_score)
+    requires_review=state in {"canceled","abandoned"} or tied_final
     now=datetime.now(timezone.utc)
     next_at=(now+timedelta(minutes=task["interval_minutes"])).isoformat()
     status_text=_bdl_status_cn(state,raw_status)
@@ -445,10 +446,12 @@ def _tick_basketball(task):
     result=outcome(int(home_score) if home_score is not None else None,int(away_score) if away_score is not None else None,tickets)
     if requires_review:result={"selection":None,"payout":0,"net":None,"total":result["total"],"tickets":[],"pending_tickets":len(tickets)}
     calc=("仅监测比分，未设置竞彩篮球投注" if not tickets else
+        "终场比分为平局，暂不自动结算" if tied_final else
         f"按当前比分试算：返奖 ¥{result.get('payout',0):.2f}" if result.get("has_score") else "尚无比分，暂不结算")
     message=(f"{'🏁' if closed else '🏀'} {league_label} 比赛{'结束' if closed else '赛况更新'}\n{home} {score or '—'} {away}\n"
         f"状态：{status_text}{clock_text}\n赛事：{competition}\n{calc}")
-    if requires_review:message+="\n比赛已取消或中止，请核对官方状态；系统不会自动结算。"
+    if tied_final:message+="\n终场比分为平局，竞彩篮球投注无法按此比分自动结算，请核对官方赛果；系统不会自动结算。"
+    elif requires_review:message+="\n比赛已取消或中止，请核对官方状态；系统不会自动结算。"
     elif closed:message+="\n终场比分已记录，比分监测已结束。"
     elif not tickets:message+="\n该比赛比分会供关联的竞彩篮球过关票结算使用。"
     elif tickets:message+="\n命中投注："+("；".join(f"{r['market_label']} {r['selection']} ¥{r['stake']:g} → 返奖 ¥{r['payout']:.2f}" for r in result["tickets"] if r["won"] is True) or "当前暂无命中")
@@ -947,6 +950,19 @@ def tasks(_:str=Depends(auth)):
         verified_scores=x["listed_scores"] if x["listed_scores_verified"] else None
         x["settlement"]=outcome(*(map(int,parts) if len(parts)==2 and all(p.isdigit() for p in parts) else [None,None]),x["tickets"],
             *(map(int,half) if len(half)==2 and all(p.isdigit() for p in half) else [None,None]),verified_scores)
+        if x["status"]=="review_required":
+            settlement=x["settlement"]
+            settlement["selection"]=None
+            settlement["payout"]=0
+            settlement["net"]=None
+            settlement["pending_tickets"]=len(settlement["tickets"])
+            for ticket in settlement["tickets"]:
+                ticket["won"]=None
+                ticket["payout"]=0
+            for market in settlement["market_summaries"]:
+                market["payout"]=0
+                market["net"]=None
+                market["pending_tickets"]=market["tickets"]
         x["settlement"]["final"]=x["status"]=="finished"
         x["status_cn"]=TASK_STATUS_CN.get(x["status"],x["status"])
         if x.get("sport")=="basketball":
