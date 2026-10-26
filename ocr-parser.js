@@ -451,8 +451,20 @@
       if (!unique.has(key)) unique.set(key, option);
     }
     const parsedOptions = [...unique.values()];
-    const totalMatch = text.match(/合计(?:金额)?(\d+(?:\.\d+)?)元/);
-    const totalStake = totalMatch ? Number(totalMatch[1]) : null;
+    const totalMatch = text.match(/(?:合计(?:投注金额|金额)?|总投注金额|投注金额|投注额|总金额)[:：]?(\d+(?:\.\d+)?)元/);
+    const multiplierMatch = text.match(/(\d+)倍/);
+    const betCountMatch = text.match(/共(\d+)注/);
+    const multiplier = multiplierMatch ? Number(multiplierMatch[1]) : null;
+    const betCount = betCountMatch ? Number(betCountMatch[1]) : null;
+    // A standard Chinese Sports Lottery ticket costs ¥2 per bet. For receipts
+    // that print stake as “N倍 / 共M注” rather than a currency total, derive
+    // the total from those printed fields so the recognized picks are
+    // immediately exportable after review.
+    const totalStake = totalMatch ? Number(totalMatch[1])
+      : Number.isInteger(multiplier) && multiplier >= 1 && Number.isInteger(betCount) && betCount >= 1
+        ? multiplier * betCount * 2
+        : Number.isInteger(multiplier) && multiplier >= 1 && /单场固定/.test(text) && parsedOptions.length
+          ? multiplier * parsedOptions.length * 2 : null;
     const payoutMatch = text.match(/(?:本票)?最高(?:可能)?(?:固定)?(?:奖金|返奖)[:：]?(\d+(?:\.\d+)?)元/);
     const maxPayout = payoutMatch ? Number(payoutMatch[1]) : null;
     const perOptionStake = Number.isFinite(totalStake) && parsedOptions.length ? totalStake / parsedOptions.length : 0;
