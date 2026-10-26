@@ -684,6 +684,37 @@
     return { color, ocr, width, height };
   }
 
+  function basketballReceiptCrop(source) {
+    // Printed tickets are usually photographed against a busy background and
+    // occupy the center/lower part of the frame. A local enlarged crop gives
+    // PaddleOCR a cleaner second pass without uploading the image.
+    const x0 = Math.round(source.width * 0.035);
+    const y0 = Math.round(source.height * 0.14);
+    const sourceWidth = Math.max(1, Math.round(source.width * 0.93));
+    const sourceHeight = Math.max(1, Math.round(source.height * 0.82));
+    const scale = Math.max(1, Math.min(3, 3000 / Math.max(sourceWidth, sourceHeight),
+      Math.sqrt(5_000_000 / (sourceWidth * sourceHeight))));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.filter = "grayscale(1) contrast(1.35)";
+    context.imageSmoothingEnabled = true;
+    context.drawImage(source, x0, y0, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
+
+  function basketballTicketQuality(ticket) {
+    if (!ticket?.matched) return -1;
+    const picks = ticket.picks || [];
+    return 100 + (ticket.market ? 30 : 0) + picks.length * 20
+      + picks.filter((pick) => Number.isFinite(Number(pick.odds)) && Number(pick.odds) >= 1).length * 15
+      + (ticket.fixture ? 5 : 0) + (Number.isFinite(ticket.totalStake) ? 5 : 0)
+      + (Number.isFinite(ticket.maxPayout) ? 5 : 0);
+  }
+
   function selectScreenshotFile(file) {
     parsedPicks = null;
     showAllCandidates = false;
@@ -785,8 +816,22 @@
       try {
         setOcrStatus("正在识别截图，当前引擎：" + worker.engineName + "…");
         const result = await worker.recognize(canvases.ocr, {}, { blocks: true });
-        const pageWords = flattenOcrWords(result.data);
+        let pageWords = flattenOcrWords(result.data);
         basketballTicket = MatchMonitorOCR.parseBasketballTicket(pageWords, canvases.width, canvases.height);
+        const likelyReceiptPhoto = Boolean(basketballTicket.matched || basketballTicket.candidate || basketballTicket.receiptOnly)
+          || (canvases.height > canvases.width * 1.15 && selectionRegions.length >= 10);
+        if (likelyReceiptPhoto && (!basketballTicket.matched || !basketballTicket.picks?.length
+          || basketballTicket.picks.some((pick) => pick.odds === null || pick.odds === undefined))) {
+          setOcrStatus("纸票文字较小，正在本机放大票面区域复核…");
+          const focusedCanvas = basketballReceiptCrop(canvases.ocr);
+          const focusedResult = await worker.recognize(focusedCanvas, {}, { blocks: true });
+          const focusedWords = flattenOcrWords(focusedResult.data);
+          const focusedTicket = MatchMonitorOCR.parseBasketballTicket(focusedWords, focusedCanvas.width, focusedCanvas.height);
+          if (basketballTicketQuality(focusedTicket) > basketballTicketQuality(basketballTicket)) {
+            basketballTicket = focusedTicket;
+            pageWords = focusedWords;
+          }
+        }
         if (basketballTicket.matched) {
           parsedPicks = basketballTicket.picks.map((pick) => ({ ...pick, source: "basketball_ticket" }));
           selectionRegionCount = 0;
@@ -881,11 +926,13 @@
           : "";
         const issueText = (basketballTicket.issueNumber ? "第" + basketballTicket.issueNumber + "期。" : "")
           + (basketballTicket.issue ? basketballTicket.issue + "。" : "");
-        setOcrStatus(engineStatus + "识别到竞彩篮球纸质票。" + issueText + fixtureText
+        const ticketTypeText = basketballTicket.receiptOnly ? "检测到体育彩票纸质票面。" : "识别到竞彩篮球纸质票。";
+        setOcrStatus(engineStatus + ticketTypeText + (parsedPicks.length ? issueText + fixtureText : "")
           + (parsedPicks.length
             ? "识别到 " + parsedPicks.length + " 项 " + (MARKETS[basketballTicket.market] || "篮球投注") + "；"
               + amountText + payoutText + "请对照纸票核对球队、选项、SP和金额。"
-            : issueText + amountText + "尚未识别到可用选项。请核对票面格式，或手动录入投注。"), !parsedPicks.length);
+            : issueText + amountText + "尚未识别到可用选项。" + (basketballTicket.issue || "")
+              + "请核对票面格式，或手动录入投注。"), !parsedPicks.length);
       } else setOcrStatus(engineStatus + (parsedPicks.length
         ? highlighted
           ? "识别出 " + parsedPicks.length + " 个候选项，检测到 " + selectionRegionCount + " 块高亮选区，并按选区建立 " + highlighted + " 条投注项（选项识别 " + recognizedLabels + "/" + selectionRegionCount + "，SP识别 " + recognizedOdds + "/" + selectionRegionCount + "）。" + gridStatus + "；精确比分清单当前有 " + listedScoreCount + "/28 项，请对照截图核对。"

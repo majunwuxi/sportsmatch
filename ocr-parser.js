@@ -31,6 +31,7 @@
       .replace(/[：﹕]/g, ":")
       .replace(/[．。]/g, ".")
       .replace(/[＋]/g, "+")
+      .replace(/[－—–−﹣]/g, "-")
       .replace(/[，,]/g, ".")
       .replace(/[（【]/g, "(")
       .replace(/[）】]/g, ")")
@@ -379,16 +380,29 @@
     const lines = groupLines(validWords, height);
     const recognizedText = lines.map((line) => line.text).join("");
     const text = normalize(recognizedText);
-    if (!/竞彩篮球|篮球胜负|让分胜负|大小分|胜分差/.test(text)
-      || !/单场固定|本票最高可能固定奖金|合计\d+(?:\.\d+)?元|第\d+期/.test(text)) {
-      return { matched: false, picks: [] };
+    const hasBasketballCue = /竞彩篮球|篮球胜负|让分胜负|大小分|胜分差|篮球/.test(text);
+    const hasReceiptCue = /体彩|第\d{5,}期|单场固定|本票|最高.{0,12}(?:奖金|返奖)|合计\d+(?:\.\d+)?元/.test(text);
+    if (hasReceiptCue && !hasBasketballCue) {
+      return { matched: true, receiptOnly: true, market: null, picks: [], totalStake: null, maxPayout: null,
+        fixture: null, issue: "未能从纸票中读取可用玩法和投注项" };
+    }
+    if (!hasBasketballCue || !hasReceiptCue) {
+      return { matched: false, candidate: hasBasketballCue || hasReceiptCue, picks: [] };
     }
 
-    const market = /胜分差/.test(text) ? "basketball_margin"
+    let market = /胜分差/.test(text) ? "basketball_margin"
       : /让分胜负/.test(text) ? "basketball_handicap"
       : /大小分/.test(text) ? "basketball_total"
       : /竞彩篮球胜负|篮球胜负/.test(text) ? "basketball_result" : null;
-    if (!market) return { matched: true, market: null, picks: [], totalStake: null, fixture: null };
+    // Printed receipts often OCR the market heading poorly while preserving
+    // the distinctive winning-margin label and its SP. Recover that market
+    // only when the text also identifies this as a basketball receipt.
+    if (!market && /竞彩篮球|篮球/.test(text)
+      && /[（(]?(?:主|客)(?:队)?(?:胜|负)?(?:1-5|6-10|11-15|16-20|21-25|26\+)(?:分)?[）)]?@/.test(text)) {
+      market = "basketball_margin";
+    }
+    if (!market) return { matched: true, candidate: true, market: null, picks: [], totalStake: null, maxPayout: null, fixture: null,
+      issue: "识别到竞彩篮球纸票，但未能辨认玩法标题" };
 
     const oddsAfter = (end) => {
       const fragment = text.slice(end, end + 28);
