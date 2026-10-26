@@ -1,5 +1,5 @@
 import os, json, time, sqlite3, threading, urllib.request, urllib.parse, urllib.error, http.client, ipaddress, socket, ssl, re, math
-from itertools import combinations
+from itertools import combinations, product
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
@@ -126,6 +126,7 @@ def init_db():
           handicap INTEGER,
           line REAL,
           odds TEXT NOT NULL,
+          selections_json TEXT NOT NULL DEFAULT '[]',
           void_confirmed INTEGER NOT NULL DEFAULT 0,
           UNIQUE(parlay_id,leg_index)
         );
@@ -161,6 +162,7 @@ def init_db():
         if "sport" not in parlay_columns:c.execute("ALTER TABLE parlay_legs ADD COLUMN sport TEXT NOT NULL DEFAULT 'football'")
         if "league_code" not in parlay_columns:c.execute("ALTER TABLE parlay_legs ADD COLUMN league_code TEXT")
         if "line" not in parlay_columns:c.execute("ALTER TABLE parlay_legs ADD COLUMN line REAL")
+        if "selections_json" not in parlay_columns:c.execute("ALTER TABLE parlay_legs ADD COLUMN selections_json TEXT NOT NULL DEFAULT '[]'")
 
 def auth(credentials:HTTPBasicCredentials=Depends(BASIC)):
     username=os.getenv("ADMIN_USER","")
@@ -581,6 +583,13 @@ class ScheduleUpdateIn(BaseModel):
     start_at:str
     interval_minutes:int=Field(ge=1,le=120)
 
+class ParlaySelectionIn(BaseModel):
+    market:str
+    selection:str
+    odds:float=Field(ge=1,allow_inf_nan=False)
+    handicap:float|None=Field(default=None,allow_inf_nan=False)
+    line:float|None=Field(default=None,allow_inf_nan=False)
+
 class ParlayLegIn(BaseModel):
     fixture_id:int=Field(gt=0)
     sport:Literal["football","basketball"]="football"
@@ -590,6 +599,7 @@ class ParlayLegIn(BaseModel):
     odds:float=Field(ge=1,allow_inf_nan=False)
     handicap:float|None=Field(default=None,allow_inf_nan=False)
     line:float|None=Field(default=None,allow_inf_nan=False)
+    selections:list[ParlaySelectionIn]|None=Field(default=None,max_length=24)
     start_at:str|None=None
     interval_minutes:int=Field(default=10,ge=1,le=120)
 
@@ -673,98 +683,119 @@ def _score_pair(value):
     parts=str(value or "").split(":")
     return tuple(map(int,parts)) if len(parts)==2 and all(part.isdigit() for part in parts) else (None,None)
 
+def _parlay_leg_choices(leg):
+    try:choices=json.loads(leg.get("selections_json") or "[]")
+    except (TypeError,json.JSONDecodeError):choices=[]
+    if not choices:
+        choices=[{"market":leg["market"],"selection":leg["selection"],"handicap":leg.get("handicap"),
+            "line":leg.get("line"),"odds":float(leg["odds"])}]
+    return choices
+
+def _parlay_pick_result(leg,pick,task):
+    current_score=((task.get("settlement_score") if task.get("status")=="finished" else task.get("last_score")) if task else None)
+    settle_value=(task.get("settlement_score") or (task.get("last_score") if task and task.get("status")=="finished" else None)) if task else None
+    if leg.get("void_confirmed"):
+        state="void"
+    elif not task:
+        state="pending"
+    elif task.get("provider_status") in VOID or task.get("status")=="review_required":
+        state="review_required"
+    elif task.get("status")=="finished":
+        home,away=_score_pair(settle_value)
+        if home is None:
+            state="review_required"
+        elif pick["market"]=="correct_score" and OTHER_SCORE_ALIASES.get(pick["selection"],pick["selection"]) in {"胜其他","平其他","负其他"} and not task.get("listed_scores_verified"):
+            state="review_required"
+        else:
+            listed=json.loads(task["listed_scores_json"]) if task.get("listed_scores_json") and task.get("listed_scores_verified") else None
+            result=ticket_matches(pick,home,away,*_score_pair(task.get("half_score")),listed)
+            state="review_required" if result is None else "won" if result else "lost"
+    else:
+        state="pending"
+    live_home,live_away=_score_pair(current_score)
+    live_result=None
+    if task and live_home is not None and state in {"pending","won","lost"}:
+        listed=json.loads(task["listed_scores_json"]) if task.get("listed_scores_json") and task.get("listed_scores_verified") else None
+        live_result=ticket_matches(pick,live_home,live_away,*_score_pair(task.get("half_score")),listed)
+    status_text={"pending":"等待赛果","won":"命中","lost":"未命中","void":"已确认无效","review_required":"待人工核验"}.get(state,state)
+    if state=="pending" and task and task.get("status") in {"paused","stopped"}:status_text="监测已暂停"
+    return {**pick,"market_label":MARKETS.get(pick["market"],"玩法"),"odds":float(pick["odds"]),"state":state,
+        "status_cn":status_text,"current_result":live_result,"score":settle_value or current_score}
+
 def evaluate_parlay(parlay,legs,tasks_by_fixture):
     pass_type,combo_indices=pass_combinations(len(legs),parlay["pass_type"])
-    multiple=int(parlay["multiples"])
-    unit=Decimal(str(parlay["unit_stake"]))
+    multiple=int(parlay["multiples"]);unit=Decimal(str(parlay["unit_stake"]))
+    choices_by_leg=[_parlay_leg_choices(leg) for leg in legs]
     leg_results=[]
-    for leg in legs:
+    for leg,choices in zip(legs,choices_by_leg):
         task=tasks_by_fixture.get(int(leg["fixture_id"]))
-        current_score=((task.get("settlement_score") if task.get("status")=="finished" else task.get("last_score")) if task else None)
-        settle_value=(task.get("settlement_score") or (task.get("last_score") if task and task.get("status")=="finished" else None)) if task else None
-        if leg.get("void_confirmed"):
-            state="void"
-        elif not task:
-            state="pending"
-        elif task.get("provider_status") in VOID or task.get("status")=="review_required":
-            state="review_required"
-        elif task.get("status")=="finished":
-            home,away=_score_pair(settle_value)
-            if home is None:
-                state="review_required"
-            elif leg["market"]=="correct_score" and OTHER_SCORE_ALIASES.get(leg["selection"],leg["selection"]) in {"胜其他","平其他","负其他"} and not task.get("listed_scores_verified"):
-                state="review_required"
-            else:
-                listed=json.loads(task["listed_scores_json"]) if task.get("listed_scores_json") and task.get("listed_scores_verified") else None
-                result=ticket_matches(leg,home,away,*_score_pair(task.get("half_score")),listed)
-                state="review_required" if result is None else "won" if result else "lost"
-        else:
-            state="pending"
-        live_home,live_away=_score_pair(current_score)
-        live_result=None
-        if task and live_home is not None and state in {"pending","won","lost"}:
-            listed=json.loads(task["listed_scores_json"]) if task.get("listed_scores_json") and task.get("listed_scores_verified") else None
-            live_result=ticket_matches(leg,live_home,live_away,*_score_pair(task.get("half_score")),listed)
-        status_text={"pending":"等待赛果","won":"命中","lost":"未命中","void":"已确认无效","review_required":"待人工核验"}.get(state,state)
-        if state=="pending" and task and task.get("status") in {"paused","stopped"}:
-            status_text="监测已暂停"
+        pick_results=[_parlay_pick_result(leg,pick,task) for pick in choices]
+        states=[pick["state"] for pick in pick_results]
+        state="void" if states and all(value=="void" for value in states) else "won" if "won" in states else "review_required" if "review_required" in states else "pending" if "pending" in states else "lost"
+        first=pick_results[0]
+        status_text={"pending":"等待赛果","won":"至少一项命中","lost":"全部未命中","void":"已确认无效","review_required":"待人工核验"}.get(state,state)
+        if state=="pending" and task and task.get("status") in {"paused","stopped"}:status_text="监测已暂停"
         leg_results.append({"id":int(leg["id"]),"leg_index":int(leg["leg_index"]),"fixture_id":int(leg["fixture_id"]),"home":leg["home"],"away":leg["away"],
             "sport":leg.get("sport") or "football","league_code":leg.get("league_code"),"league_name":leg.get("league_name"),"kickoff":leg.get("kickoff"),
             "home_cn":BASKETBALL_TEAM_NAMES_ZH.get(leg["home"],"") if leg.get("sport")=="basketball" else "",
             "away_cn":BASKETBALL_TEAM_NAMES_ZH.get(leg["away"],"") if leg.get("sport")=="basketball" else "",
-            "monitor_start_at":task.get("start_at") if task else None,"market":leg["market"],"market_label":MARKETS.get(leg["market"],"玩法"),
-            "selection":leg["selection"],"handicap":leg.get("handicap"),"line":leg.get("line"),"odds":float(leg["odds"]),"score":settle_value or current_score,
+            "monitor_start_at":task.get("start_at") if task else None,"market":first["market"],"market_label":first["market_label"],
+            "selection":first["selection"],"handicap":first.get("handicap"),"line":first.get("line"),"odds":first["odds"],"score":first.get("score"),
             "match_status":task.get("provider_status") if task else None,"task_status":task.get("status") if task else None,
-            "state":state,"status_cn":status_text,"current_result":live_result,"void_confirmed":bool(leg.get("void_confirmed"))})
+            "state":state,"status_cn":status_text,"current_result":first.get("current_result"),"void_confirmed":bool(leg.get("void_confirmed")),"selections":pick_results})
 
-    combos=[]
-    confirmed_payout=Decimal(0)
-    max_possible=Decimal(0)
-    max_payout=Decimal(0)
-    has_pending=False
-    has_review=False
-    for combo_no,indices in enumerate(combo_indices,1):
-        combo_legs=[legs[index] for index in indices]
-        active=[(index,legs[index],leg_results[index]) for index in indices if not legs[index].get("void_confirmed")]
-        stake=unit*multiple
-        if not active:
-            state="review_required";payout=None;has_review=True
-        elif any(result["state"]=="lost" for _,_,result in active):
-            state="lost";payout=Decimal(0)
-        elif any(result["state"]=="review_required" for _,_,result in active):
-            state="review_required";payout=None;has_review=True
-        elif any(result["state"]=="pending" for _,_,result in active):
-            state="pending";payout=None;has_pending=True
-        else:
-            state="won"
-            single=_money(unit*math.prod(Decimal(str(item["odds"])) for _,item,_ in active))
-            payout=single*multiple
-            confirmed_payout+=payout
-        theoretical=_money(unit*math.prod(Decimal(str(item["odds"])) for _,item,_ in active))*multiple if active else None
-        if theoretical is not None:max_payout+=theoretical
-        if state=="pending" and theoretical is not None: max_possible+=theoretical
-        combos.append({"number":combo_no,"legs":[leg_results[index] for index in indices],"state":state,
-            "status_cn":{"won":"中奖","lost":"未中奖","pending":"待结算","review_required":"待核验"}.get(state,state),
-            "stake":float(stake),"payout":float(payout) if payout is not None else None,"max_payout":float(theoretical) if theoretical is not None else None})
+    combos=[];confirmed_payout=Decimal(0);max_possible=Decimal(0);max_payout=Decimal(0)
+    has_pending=False;has_review=False;choice_payouts=[];pending_payouts=[]
+    for event_indices in combo_indices:
+        event_choices=[choices_by_leg[index] for index in event_indices]
+        for selected_choices in product(*event_choices):
+            selected_results=[_parlay_pick_result(legs[index],pick,tasks_by_fixture.get(int(legs[index]["fixture_id"])))
+                for index,pick in zip(event_indices,selected_choices)]
+            active=[(index,pick,result) for index,pick,result in zip(event_indices,selected_choices,selected_results)
+                if not legs[index].get("void_confirmed")]
+            stake=unit*multiple
+            if not active:
+                state="review_required";payout=None;has_review=True
+            elif any(result["state"]=="lost" for _,_,result in active):
+                state="lost";payout=Decimal(0)
+            elif any(result["state"]=="review_required" for _,_,result in active):
+                state="review_required";payout=None;has_review=True
+            elif any(result["state"]=="pending" for _,_,result in active):
+                state="pending";payout=None;has_pending=True
+            else:
+                state="won";single=_money(unit*math.prod(Decimal(str(pick["odds"])) for _,pick,_ in active));payout=single*multiple;confirmed_payout+=payout
+            theoretical=_money(unit*math.prod(Decimal(str(pick["odds"])) for _,pick,_ in active))*multiple if active else None
+            if theoretical is not None:
+                choice_payouts.append(theoretical)
+                if state=="pending":pending_payouts.append(theoretical)
+            combo_legs=[]
+            for index,pick,result in zip(event_indices,selected_choices,selected_results):
+                combo_legs.append({**leg_results[index],**result,"market":pick["market"],"selection":pick["selection"],
+                    "handicap":pick.get("handicap"),"line":pick.get("line"),"odds":float(pick["odds"]),"state":result["state"],
+                    "status_cn":result["status_cn"],"current_result":result["current_result"]})
+            combos.append({"number":len(combos)+1,"legs":combo_legs,"state":state,
+                "status_cn":{"won":"中奖","lost":"未中奖","pending":"待结算","review_required":"待核验"}.get(state,state),
+                "stake":float(stake),"payout":float(payout) if payout is not None else None,
+                "max_payout":float(theoretical) if theoretical is not None else None})
 
-    needed_fixtures={
-        int(leg["fixture_id"])
-        for combo in combos if combo["state"] in {"pending","review_required"}
-        for leg in combo["legs"] if leg["state"]=="pending"
-    }
+    only_full_combo=len(combo_indices)==1 and len(combo_indices[0])==len(legs)
+    if only_full_combo:
+        max_payout=max(choice_payouts,default=Decimal(0));max_possible=max(pending_payouts,default=Decimal(0))
+    else:
+        max_payout=sum(choice_payouts,Decimal(0));max_possible=sum(pending_payouts,Decimal(0))
+    needed_fixtures={int(item["fixture_id"]) for combo in combos if combo["state"] in {"pending","review_required"}
+        for item in combo["legs"] if item["state"]=="pending"}
     for result in leg_results:
         result["monitor_needed"]=int(result["fixture_id"]) in needed_fixtures
-        if result["state"]=="pending" and not result["monitor_needed"]:
-            result["status_cn"]="本票无需继续等待"
+        if result["state"]=="pending" and not result["monitor_needed"]:result["status_cn"]="本票无需继续等待"
 
-    if has_review: status="review_required"
-    elif has_pending: status="pending"
-    elif any(item["state"]=="won" for item in combos): status="won"
-    else: status="lost"
-    total=Decimal(str(parlay["total_stake"]))
-    void_adjusted=any(bool(leg.get("void_confirmed")) for leg in legs)
+    if has_review:status="review_required"
+    elif has_pending:status="pending"
+    elif any(item["state"]=="won" for item in combos):status="won"
+    else:status="lost"
+    total=Decimal(str(parlay["total_stake"]));void_adjusted=any(bool(leg.get("void_confirmed")) for leg in legs)
     return {"id":int(parlay["id"]),"pass_type":pass_type,"multiples":multiple,"unit_stake":float(unit),
-        "combination_count":len(combo_indices),"total_stake":float(total),"declared_payout":parlay.get("declared_payout"),
+        "combination_count":len(combos),"total_stake":float(total),"declared_payout":parlay.get("declared_payout"),
         "max_payout":float(max_payout),"payout_matches_ticket":None if void_adjusted or parlay.get("declared_payout") is None else _money(max_payout)==_money(parlay["declared_payout"]),"payout":float(_money(confirmed_payout)),
         "max_possible_payout":float(_money(confirmed_payout+max_possible)) if not has_review else None,
         "net":float(_money(confirmed_payout-total)) if status in {"won","lost"} else None,
@@ -915,15 +946,28 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
     if not 2<=len(data.legs)<=8:raise HTTPException(422,"过关票须包含2到8场比赛")
     if len({leg.sport for leg in data.legs})!=1:raise HTTPException(422,"同一张过关票不能混合足球和篮球比赛")
     if Decimal(str(data.unit_stake))!=Decimal("2"):raise HTTPException(422,"竞彩过关每注金额必须为2元")
-    try:canonical,combos=pass_combinations(len(data.legs),data.pass_type)
+    try:canonical,combo_indices=pass_combinations(len(data.legs),data.pass_type)
     except HTTPException:raise
     except Exception:raise HTTPException(422,"无效的过关方式")
-    count=len(combos)
+    canonical_choices={}
+    for leg in data.legs:
+        raw_choices=leg.selections or [ParlaySelectionIn(market=leg.market,selection=leg.selection,odds=leg.odds,handicap=leg.handicap,line=leg.line)]
+        if not raw_choices:raise HTTPException(422,"每场比赛至少需要一个投注选项")
+        if len({pick.market for pick in raw_choices})!=1:raise HTTPException(422,"同一比赛腿的多选项必须属于同一玩法")
+        normalized=[];seen=set()
+        for pick in raw_choices:
+            candidate=Ticket(selection=pick.selection,market=pick.market,stake=2,odds=pick.odds,handicap=pick.handicap,line=pick.line)
+            validated=validate_tickets([candidate],leg.sport)[0]
+            key=(validated["market"],validated["selection"],validated.get("handicap"),validated.get("line"),validated["odds"])
+            if key in seen:raise HTTPException(422,"同一比赛腿中存在重复投注项")
+            seen.add(key);normalized.append(validated)
+        canonical_choices[id(leg)]=normalized
+    count=sum(math.prod(len(canonical_choices[id(data.legs[index])]) for index in indices) for indices in combo_indices)
+    if count>5000:raise HTTPException(422,"展开后的过关注数超过5000注")
     total=Decimal("2")*int(data.multiples)*count
     if data.declared_total is not None and _money(data.declared_total)!=_money(total):
         raise HTTPException(422,f"票面总金额与过关组合数不符：按此过关方式应为¥{total:.2f}")
     internal_ids={}
-    canonical_legs={}
     for leg in data.legs:
         if leg.sport=="basketball":
             namespace=BALLDONTLIE_GAME_ID_BASE[leg.league_code]
@@ -932,8 +976,6 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
         else:internal_id=leg.fixture_id
         if internal_id in internal_ids.values():raise HTTPException(422,"同一场比赛不能重复作为多条比赛腿")
         internal_ids[id(leg)]=internal_id
-        candidate=Ticket(selection=leg.selection,market=leg.market,stake=2,odds=leg.odds,handicap=leg.handicap,line=leg.line)
-        canonical_legs[id(leg)]=validate_tickets([candidate],leg.sport)[0]
     # Reuse existing task rows by provider-specific ID. Basketball IDs are
     # namespaced so NBA, WNBA, and API-Football fixtures cannot collide.
     fixture_ids=list(internal_ids.values())
@@ -1002,10 +1044,10 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
             parlay_id=cur.lastrowid
             for index,leg in enumerate(data.legs):
                 row=current[internal_ids[id(leg)]]
-                validated=canonical_legs[id(leg)]
-                c.execute("""INSERT INTO parlay_legs(parlay_id,leg_index,fixture_id,sport,league_code,home,away,league_name,kickoff,market,selection,handicap,line,odds)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(parlay_id,index,internal_ids[id(leg)],leg.sport,leg.league_code if leg.sport=="basketball" else None,
-                    row["home"],row["away"],row.get("league_name"),row.get("kickoff"),validated["market"],validated["selection"],validated.get("handicap"),validated.get("line"),str(validated["odds"])))
+                validated=canonical_choices[id(leg)];first=validated[0]
+                c.execute("""INSERT INTO parlay_legs(parlay_id,leg_index,fixture_id,sport,league_code,home,away,league_name,kickoff,market,selection,handicap,line,odds,selections_json)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(parlay_id,index,internal_ids[id(leg)],leg.sport,leg.league_code if leg.sport=="basketball" else None,
+                    row["home"],row["away"],row.get("league_name"),row.get("kickoff"),first["market"],first["selection"],first.get("handicap"),first.get("line"),str(first["odds"]),json.dumps(validated,ensure_ascii=False,separators=(",",":"))))
     result=sync_parlay(parlay_id)
     if result:result["resumed_fixture_ids"]=resumed
     return result

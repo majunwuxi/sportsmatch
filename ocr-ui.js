@@ -811,6 +811,7 @@
     let scoreGridRows = [];
     let scoreListRows = [];
     let basketballTicket = null;
+    let parlayTicket = null;
     try {
       setOcrStatus("正在载入 PaddleOCR.js（首次使用需联网下载并缓存模型）…");
       const canvases = await imageCanvases(screenshotFile);
@@ -821,6 +822,8 @@
         setOcrStatus("正在识别截图，当前引擎：" + worker.engineName + "…");
         const result = await worker.recognize(canvases.ocr, {}, { blocks: true });
         let pageWords = flattenOcrWords(result.data);
+        parlayTicket = window.MatchMonitorParlayParser?.parseParlayReceipt(pageWords, canvases.width, canvases.height) || null;
+        if (!parlayTicket?.matched) {
         basketballTicket = MatchMonitorOCR.parseBasketballTicket(pageWords, canvases.width, canvases.height);
         const likelyReceiptPhoto = Boolean(basketballTicket.matched || basketballTicket.candidate || basketballTicket.receiptOnly)
           || (canvases.height > canvases.width * 1.15 && selectionRegions.length >= 10);
@@ -897,8 +900,19 @@
         scoreListRows = [...parsedPicks, ...pageCandidatesWithGrid, ...selectedRows, ...scoreGridRows];
         $("listedScores").value = MatchMonitorOCR.listedScoresFromRows(scoreListRows).join(", ");
         }
+        }
       } finally {
         await worker.terminate();
+      }
+      if (parlayTicket?.matched) {
+        $("ocrReview").hidden = true;
+        $("simulatorManual").hidden = true;
+        window.MatchMonitorParlayUI?.importReceipt(parlayTicket);
+        const engineStatus = "识别引擎：" + worker.engineName
+          + (worker.fallbackNotice ? "（" + worker.fallbackNotice + "）" : "") + "。";
+        const ticketText = `识别到${parlayTicket.sport === "basketball" ? "竞彩篮球" : "竞彩足球"}过关票：${parlayTicket.legs.length}场、${parlayTicket.betCount || "?"}注、${parlayTicket.multiples || 1}倍。已填入过关监测编辑器；请核对每场玩法、投注项和SP，并逐场绑定真实比赛。`;
+        setOcrStatus(engineStatus + ticketText + (parlayTicket.warnings?.length ? " " + parlayTicket.warnings.join(" ") : ""));
+        return;
       }
       $("ocrReview").hidden = false;
       clearOcrConfirmation();
