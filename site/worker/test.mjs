@@ -163,6 +163,9 @@ test('parlay API proxy requires an authenticated Site visitor and allows only sc
   const payload={pass_type:'2串1',multiples:5,legs:[]};
   const post=await worker.fetch(req('/api/parlays',{method:'POST',headers:{'oai-authenticated-user-id':'owner',origin,'content-type':'application/json'},body:JSON.stringify(payload)}),env);
   assert.equal(post.status,200);assert.equal(calls[1].url,'https://backend.example/api/parlays');assert.equal(calls[1].options.body,JSON.stringify(payload));
+  const update={multiples:3,legs:[{leg_id:10,odds:[3.5]}]};
+  const put=await worker.fetch(req('/api/parlays/9/odds',{method:'PUT',headers:{'oai-authenticated-user-id':'owner',origin,'content-type':'application/json'},body:JSON.stringify(update)}),env);
+  assert.equal(put.status,200);assert.equal(calls[2].url,'https://backend.example/api/parlays/9/odds');assert.equal(calls[2].options.method,'PUT');assert.equal(calls[2].options.body,JSON.stringify(update));
   assert.equal((await worker.fetch(req('/api/parlays',{method:'POST',headers:{'oai-authenticated-user-id':'owner',origin:'https://evil.example'}}),env)).status,403);
  }finally{globalThis.fetch=old}
 });

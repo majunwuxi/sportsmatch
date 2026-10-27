@@ -58,7 +58,7 @@ if(url.pathname==='/')return new Response(HTML,{headers:{'content-type':'text/ht
  // Owner-private Sites boundary also authorizes service health probes; all records require visitor identity.
  if(!(url.pathname==='/api/health'&&request.method==='GET')&&!request.headers.get('oai-authenticated-user-id'))return json({detail:'请先登录 ChatGPT'},401);
  if(url.pathname==='/api/site-status')return json({configured:Boolean(env.BACKEND_URL&&env.BACKEND_USER&&env.BACKEND_PASSWORD)});
- if(!/^\/api\/(health|usage|fixtures|statistics|tasks(?:\/\d+(?:\/(?:tickets|schedule|pause|resume|stop))?)?|parlays(?:\/\d+(?:\/(?:stop|legs\/\d+\/confirm-void))?)?)$/.test(url.pathname))return json({detail:'Not found'},404);
+ if(!/^\/api\/(health|usage|fixtures|statistics|tasks(?:\/\d+(?:\/(?:tickets|schedule|pause|resume|stop))?)?|parlays(?:\/\d+(?:\/(?:stop|odds|legs\/\d+\/confirm-void))?)?)$/.test(url.pathname))return json({detail:'Not found'},404);
  if(!['GET','POST','PUT','DELETE'].includes(request.method))return json({detail:'Method not allowed'},405);
  if(request.method!=='GET'&&request.headers.get('origin')!==url.origin)return json({detail:'Origin rejected'},403);
  if(!env.BACKEND_URL||!env.BACKEND_USER||!env.BACKEND_PASSWORD)return json({detail:'独立监测后台尚未配置。请设置服务端连接；当前不会启动任何监测任务。'},503);
