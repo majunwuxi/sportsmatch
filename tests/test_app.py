@@ -821,3 +821,27 @@ def test_budget_atomic(monkeypatch):
     monkeypatch.setattr(m,'request_json',lambda *a,**kw:{'response':[]})
     m.api('fixtures',{})
     with pytest.raises(RuntimeError,match='budget'):m.api('fixtures',{})
+
+def test_statistics_noon_boundary_history_pending_and_loss(client, monkeypatch):
+    import json
+    with m.conn() as c:
+        for fid,kickoff,status,score in [(1,'2026-10-27T03:59:00+00:00','finished','0:1'),(2,'2026-10-27T04:00:00+00:00','pending',None)]:
+            c.execute("""INSERT INTO tasks(fixture_id,home,away,kickoff,start_at,interval_minutes,next_check,status,last_score,settlement_score,finished_at,ticket_json,created_at)
+                VALUES(?,?,?,?,?,5,?,?,?,?,?,?,?)""",(fid,'A','B',kickoff,kickoff,kickoff,status,score,score,'2026-10-01T00:00:00+00:00',json.dumps([{'market':'match_result','selection':'胜','stake':10,'odds':2}]),kickoff))
+    response=client.get('/api/statistics',auth=('test','test-password'))
+    assert response.status_code==200
+    days=response.json()['days']
+    assert days['2026-10-26']=={'stake':10.0,'payout':0.0,'settled_stake':10.0,'net':-10.0,'pending':0}
+    assert days['2026-10-27']=={'stake':10.0,'payout':0.0,'settled_stake':0.0,'net':0.0,'pending':1}
+
+def test_statistics_parlay_uses_first_kickoff_and_updates_result(client, monkeypatch):
+    with m.conn() as c:
+        c.execute("INSERT INTO parlay_tickets(pass_type,multiples,total_stake,created_at,updated_at) VALUES('2串1',1,10,'2026-10-26','2026-10-26')")
+    monkeypatch.setattr(m,'load_parlay',lambda _: ({},[{'kickoff':'2026-10-27T07:00:00+00:00'},{'kickoff':'2026-10-26T07:00:00+00:00'}],{}))
+    state={'state':'pending','payout':None}
+    monkeypatch.setattr(m,'evaluate_parlay',lambda *args:{'combinations':[{'stake':10,**state}]})
+    day=client.get('/api/statistics',auth=('test','test-password')).json()['days']['2026-10-26']
+    assert (day['stake'],day['pending'],day['net'])==(10,1,0)
+    state.update(state='won',payout=18)
+    day=client.get('/api/statistics',auth=('test','test-password')).json()['days']['2026-10-26']
+    assert (day['stake'],day['pending'],day['payout'],day['net'])==(10,0,18,8)

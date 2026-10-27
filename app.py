@@ -923,14 +923,14 @@ def _utc_datetime(value):
         return datetime.min.replace(tzinfo=timezone.utc)
 
 @app.get("/api/tasks")
-def tasks(_:str=Depends(auth)):
+def tasks(_:str=Depends(auth), include_history:bool=False):
     now=datetime.now(timezone.utc)
     with conn() as c:
         rows=[dict(x) for x in c.execute("SELECT * FROM tasks ORDER BY created_at DESC")]
     upcoming=[]
     visible=[]
     for x in rows:
-        if x["status"]=="finished":
+        if x["status"]=="finished" and not include_history:
             ended=x.get("finished_at") or x.get("last_check") or x.get("created_at")
             if _utc_datetime(ended)+timedelta(hours=24)<=now:
                 continue
@@ -973,6 +973,43 @@ def tasks(_:str=Depends(auth)):
             x["game_status_cn"]=(raw_status or _bdl_status_cn(state)) if state else "等待首次查询"
 
     return rows
+
+@app.get("/api/statistics")
+def statistics(_:str=Depends(auth)):
+    days={}
+    missing=0
+    def date_key(value):
+        try:
+            return (_utc_datetime(value).astimezone(TZ)-timedelta(hours=12)).date().isoformat() if value else None
+        except (ValueError,TypeError,OverflowError):
+            return None
+    def add(key,stake,payout,settled):
+        day=days.setdefault(key,{"stake":Decimal(0),"payout":Decimal(0),"settled_stake":Decimal(0),"pending":0})
+        day["stake"]+=Decimal(str(stake))
+        if settled:
+            day["settled_stake"]+=Decimal(str(stake));day["payout"]+=Decimal(str(payout or 0))
+        else:day["pending"]+=1
+    for task in tasks(_=_,include_history=True):
+        picks=task.get("tickets") or []
+        if not picks:continue
+        key=date_key(task.get("kickoff"))
+        if not key:missing+=1;continue
+        result=task["settlement"]
+        for pick in result["tickets"]:
+            settled=task["status"]=="finished" and pick["won"] is not None
+            add(key,pick["stake"],pick["payout"],settled)
+    with conn() as c:ids=[row[0] for row in c.execute("SELECT id FROM parlay_tickets")]
+    for parlay_id in ids:
+        loaded=load_parlay(parlay_id)
+        if not loaded:continue
+        parent,legs,linked_tasks=loaded
+        keys=[date_key(leg.get("kickoff")) for leg in legs]
+        if not keys or any(key is None for key in keys):missing+=1;continue
+        key=min(keys)
+        result=evaluate_parlay(parent,legs,linked_tasks)
+        for combo in result["combinations"]:
+            add(key,combo["stake"],combo["payout"],combo["state"] in {"won","lost"})
+    return {"days":{key:{"stake":float(v["stake"]),"payout":float(v["payout"]),"settled_stake":float(v["settled_stake"]),"net":float(v["payout"]-v["settled_stake"]),"pending":v["pending"]} for key,v in days.items()},"missing_dates":missing}
 
 @app.get("/api/parlays")
 def get_parlays(_:str=Depends(auth)):
