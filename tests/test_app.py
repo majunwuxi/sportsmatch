@@ -837,9 +837,9 @@ def test_statistics_noon_boundary_history_pending_and_loss(client, monkeypatch):
 def test_statistics_parlay_uses_first_kickoff_and_updates_result(client, monkeypatch):
     with m.conn() as c:
         c.execute("INSERT INTO parlay_tickets(pass_type,multiples,total_stake,created_at,updated_at) VALUES('2串1',1,10,'2026-10-26','2026-10-26')")
-    monkeypatch.setattr(m,'load_parlay',lambda _: ({},[{'kickoff':'2026-10-27T07:00:00+00:00'},{'kickoff':'2026-10-26T07:00:00+00:00'}],{}))
+    monkeypatch.setattr(m,'load_parlay',lambda _: ({},[{'kickoff':'2026-10-27T07:00:00+00:00','home':'A','away':'B'},{'kickoff':'2026-10-26T07:00:00+00:00','home':'C','away':'D'}],{}))
     state={'state':'pending','payout':None}
-    monkeypatch.setattr(m,'evaluate_parlay',lambda *args:{'combinations':[{'stake':10,**state}]})
+    monkeypatch.setattr(m,'evaluate_parlay',lambda *args:{'combinations':[{'stake':10,**state}],'pass_type':'2串1','total_stake':10,'payout':state['payout'] or 0,'net':None if state['state']=='pending' else state['payout']-10,'legs':[]})
     day=client.get('/api/statistics',auth=('test','test-password')).json()['days']['2026-10-26']
     assert (day['stake'],day['pending'],day['net'])==(10,1,0)
     state.update(state='won',payout=18)

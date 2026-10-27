@@ -977,6 +977,7 @@ def tasks(_:str=Depends(auth), include_history:bool=False):
 @app.get("/api/statistics")
 def statistics(_:str=Depends(auth)):
     days={}
+    details={}
     missing=0
     def date_key(value):
         try:
@@ -998,6 +999,8 @@ def statistics(_:str=Depends(auth)):
         for pick in result["tickets"]:
             settled=task["status"]=="finished" and pick["won"] is not None
             add(key,pick["stake"],pick["payout"],settled)
+            line=f"（让球/让分 {pick['handicap']}）" if pick.get("handicap") is not None else f"（总分 {pick['line']}）" if pick.get("line") is not None else ""
+            details.setdefault(key,[]).append({"type":"single","id":task["id"],"kickoff":task.get("kickoff"),"match":task["home"]+" vs "+task["away"],"market":pick["market_label"],"selection":f"{pick['selection']}{line} · SP {pick['odds']}","stake":pick["stake"],"payout":pick["payout"] if settled else None,"net":pick["payout"]-pick["stake"] if settled else None})
     with conn() as c:ids=[row[0] for row in c.execute("SELECT id FROM parlay_tickets")]
     for parlay_id in ids:
         loaded=load_parlay(parlay_id)
@@ -1009,7 +1012,8 @@ def statistics(_:str=Depends(auth)):
         result=evaluate_parlay(parent,legs,linked_tasks)
         for combo in result["combinations"]:
             add(key,combo["stake"],combo["payout"],combo["state"] in {"won","lost"})
-    return {"days":{key:{"stake":float(v["stake"]),"payout":float(v["payout"]),"settled_stake":float(v["settled_stake"]),"net":float(v["payout"]-v["settled_stake"]),"pending":v["pending"]} for key,v in days.items()},"missing_dates":missing}
+        details.setdefault(key,[]).append({"type":"parlay","id":parlay_id,"kickoff":min(legs,key=lambda leg:_utc_datetime(leg["kickoff"]))["kickoff"],"match":"；".join(leg["home"]+" vs "+leg["away"] for leg in legs),"market":result["pass_type"],"selection":"；".join(f"{leg['home']} vs {leg['away']}："+"、".join(f"{pick['market_label']} {pick['selection']} SP {pick['odds']}" for pick in leg["selections"]) for leg in result["legs"]),"stake":result["total_stake"],"payout":result["payout"],"net":result["net"],"pending":sum(combo["state"] not in {"won","lost"} for combo in result["combinations"])})
+    return {"days":{key:{"stake":float(v["stake"]),"payout":float(v["payout"]),"settled_stake":float(v["settled_stake"]),"net":float(v["payout"]-v["settled_stake"]),"pending":v["pending"]} for key,v in days.items()},"details":details,"missing_dates":missing}
 
 @app.get("/api/parlays")
 def get_parlays(_:str=Depends(auth)):
