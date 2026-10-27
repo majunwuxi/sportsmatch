@@ -213,6 +213,14 @@
     try { const items=await core.req("/api/parlays");host.replaceChildren();for(const item of items)renderTicket(host,item); }
     catch(error){host.textContent="过关票接口尚不可用：请先将独立后台升级到包含过关票监测的版本。原有单场监测继续可用。";host.title=error.message||"";}
   }
+  function parlayCardAge(ticket, now=Date.now()) {
+    const legs=ticket.legs||[];
+    if(!legs.length||!legs.every(leg=>leg.task_status==="finished"))return "";
+    const times=legs.map(leg=>leg.kickoff?Date.parse(leg.kickoff):NaN);
+    if(times.some(time=>!Number.isFinite(time)))return "finished";
+    const age=now-Math.max(...times);
+    return age>=24*60*60*1000?"hidden":age>12*60*60*1000?"old":"finished";
+  }
   function roundRect(ctx,x,y,w,h,r,color) {
     ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);
     ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();ctx.fillStyle=color;ctx.fill();
@@ -275,10 +283,12 @@
     $("downloadTicketImage").hidden=false;if(previous)URL.revokeObjectURL(previous);if(!dialog.open)dialog.showModal();
   }
   function renderTicket(host,ticket) {
+    const cardAge=parlayCardAge(ticket);
+    if(cardAge==="hidden")return;
     const ticketKey=String(ticket.id),isFinal=Boolean(ticket.final);
     if(isFinal){editingParlays.delete(ticketKey);parlayOddsDrafts.delete(ticketKey)}
     const editing=editingParlays.has(ticketKey)&&!isFinal;
-    const box=document.createElement("article");box.className="parlay-ticket";
+    const box=document.createElement("article");box.className="parlay-ticket"+(cardAge==="old"?" parlay-finished-old":cardAge==="finished"?" parlay-finished":"");
     const top=document.createElement("div");top.className="row";
     const title=document.createElement("strong");title.textContent=`${ticket.pass_type} · ${ticket.multiples}倍 · ${ticket.combination_count}注`;
     const badge=document.createElement("span");badge.className="pill";badge.textContent=ticket.status_cn;
