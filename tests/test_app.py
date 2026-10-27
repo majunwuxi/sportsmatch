@@ -295,7 +295,7 @@ def test_parlay_loses_if_any_leg_in_a_2_by_1_loses(client):
     assert result['payout']==0
     assert result['net']==-10
 
-def test_lost_2_by_1_combo_stops_its_unneeded_parlay_only_watcher(client,monkeypatch):
+def test_lost_2_by_1_keeps_other_match_monitored(client,monkeypatch):
     def provider(endpoint,params):
         fixture_id=int(params['id'])
         return [{'fixture':{'id':fixture_id,'date':'2026-10-25T12:00:00Z'},
@@ -311,11 +311,19 @@ def test_lost_2_by_1_combo_stops_its_unneeded_parlay_only_watcher(client,monkeyp
     result=m.sync_parlay(parlay_id,send_notice=False)
     assert result['status']=='lost'
     assert result['combinations'][0]['state']=='lost'
-    assert result['legs'][1]['monitor_needed'] is False
-    assert result['legs'][1]['status_cn']=='本票无需继续等待'
+    assert result['legs'][1]['monitor_needed'] is True
+    assert result['legs'][1]['status_cn']=='等待赛果'
     with m.conn() as c:
         second=c.execute("SELECT status,enabled FROM tasks WHERE fixture_id=13").fetchone()
-        assert (second['status'],second['enabled'])==('stopped',0)
+        assert (second['status'],second['enabled'])==('pending',1)
+    with m.conn() as c:
+        c.execute("UPDATE tasks SET status='finished',enabled=0,provider_status='FT',last_score='2:0',settlement_score='2:0' WHERE fixture_id=13")
+    m.sync_parlays_for_fixture(13)
+    final=m.load_parlay(parlay_id)
+    evaluated=m.evaluate_parlay(*final)
+    assert evaluated['status']=='lost'
+    assert evaluated['legs'][1]['task_status']=='finished'
+    assert evaluated['legs'][1]['score']=='2:0'
 
 def test_winning_first_leg_keeps_2_by_1_waiting_for_second_result(client,monkeypatch):
     def provider(endpoint,params):

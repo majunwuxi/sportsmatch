@@ -812,11 +812,8 @@ def evaluate_parlay(parlay,legs,tasks_by_fixture):
         max_payout=max(choice_payouts,default=Decimal(0));max_possible=max(pending_payouts,default=Decimal(0))
     else:
         max_payout=sum(choice_payouts,Decimal(0));max_possible=sum(pending_payouts,Decimal(0))
-    needed_fixtures={int(item["fixture_id"]) for combo in combos if combo["state"] in {"pending","review_required"}
-        for item in combo["legs"] if item["state"]=="pending"}
     for result in leg_results:
-        result["monitor_needed"]=int(result["fixture_id"]) in needed_fixtures
-        if result["state"]=="pending" and not result["monitor_needed"]:result["status_cn"]="本票无需继续等待"
+        result["monitor_needed"]=parlay.get("status")!="stopped" and result.get("task_status") not in {"finished","review_required"}
 
     if has_review:status="review_required"
     elif has_pending:status="pending"
@@ -842,18 +839,10 @@ def load_parlay(parlay_id):
 
 def pending_parlay_fixture_ids():
     with conn() as c:
-        ids=[int(row[0]) for row in c.execute(
-            "SELECT id FROM parlay_tickets WHERE status IN ('pending','review_required')")]
-    required=set()
-    for parlay_id in ids:
-        loaded=load_parlay(parlay_id)
-        if not loaded:continue
-        parent,legs,tasks=loaded
-        evaluated=evaluate_parlay(parent,legs,tasks)
-        for combo in evaluated["combinations"]:
-            if combo["state"] in {"pending","review_required"}:
-                required.update(int(leg["fixture_id"]) for leg in combo["legs"] if leg["state"]=="pending")
-    return required
+        return {int(row[0]) for row in c.execute("""SELECT DISTINCT l.fixture_id FROM parlay_legs l
+            JOIN parlay_tickets p ON p.id=l.parlay_id
+            LEFT JOIN tasks t ON t.fixture_id=l.fixture_id
+            WHERE p.status!='stopped' AND (t.id IS NULL OR t.status NOT IN ('finished','review_required'))""")}
 
 def sync_parlay(parlay_id,send_notice=True):
     loaded=load_parlay(parlay_id)
@@ -879,7 +868,7 @@ def sync_parlay(parlay_id,send_notice=True):
 
 def sync_parlays_for_fixture(fixture_id):
     with conn() as c:
-        ids=[row[0] for row in c.execute("SELECT DISTINCT p.id FROM parlay_tickets p JOIN parlay_legs l ON l.parlay_id=p.id WHERE l.fixture_id=? AND p.status IN ('pending','review_required')",(fixture_id,))]
+        ids=[row[0] for row in c.execute("SELECT DISTINCT p.id FROM parlay_tickets p JOIN parlay_legs l ON l.parlay_id=p.id WHERE l.fixture_id=? AND p.status!='stopped'",(fixture_id,))]
     for parlay_id in ids:sync_parlay(parlay_id)
 
 @app.get("/api/health")
