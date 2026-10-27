@@ -292,7 +292,15 @@
     const top=document.createElement("div");top.className="row";
     const title=document.createElement("strong");title.textContent=`${ticket.pass_type} · ${ticket.multiples}倍 · ${ticket.combination_count}注`;
     const badge=document.createElement("span");badge.className="pill";badge.textContent=ticket.status_cn;
-    top.append(title,badge);box.append(top);
+    const indicators=document.createElement("div");indicators.className="parlay-ticket-indicators";indicators.append(badge);
+    const confirmedPayout=Number(ticket.payout);
+    if(Number.isFinite(confirmedPayout)&&confirmedPayout>0){
+      const bubble=document.createElement("span");bubble.className="payout-badge";
+      const caption=document.createElement("span");caption.className="payout-badge-label";caption.textContent=isFinal?"返奖总额":"已确认返奖";
+      const amount=document.createElement("strong");amount.className="payout-badge-amount";amount.textContent=money(confirmedPayout);
+      bubble.setAttribute("aria-label",caption.textContent+" "+amount.textContent);bubble.append(caption,amount);indicators.append(bubble);
+    }
+    top.append(title,indicators);box.append(top);
     const totals=document.createElement("p");totals.className="notice";totals.textContent=`总投入 ${money(ticket.total_stake)}${ticket.declared_payout?` · 票面最高奖 ${money(ticket.declared_payout)}${ticket.payout_matches_ticket===false?"（与当前SP不符）":""}`:""} · 已确认返奖 ${money(ticket.payout)} · ${ticket.net===null?`待结算${ticket.max_possible_payout===null?"":`，最高可能返奖 ${money(ticket.max_possible_payout)}`}`:`净利润 ${ticket.net>=0?"+":""}${money(ticket.net)}`}`;box.append(totals);
     for(const leg of ticket.legs||[]){
       const picks=ticketPicks(leg),home=displayTeamName(leg.home,leg.home_cn),away=displayTeamName(leg.away,leg.away_cn);
