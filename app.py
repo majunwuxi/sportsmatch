@@ -635,6 +635,7 @@ class ParlayOddsLegUpdateIn(BaseModel):
 
 class ParlayOddsUpdateIn(BaseModel):
     legs:list[ParlayOddsLegUpdateIn]=Field(min_length=2,max_length=8)
+    multiples:int|None=Field(default=None,gt=0,le=10000,strict=True)
 
 class ConfirmVoidIn(BaseModel):
     confirmed:bool
@@ -1130,13 +1131,14 @@ def update_parlay_odds(parlay_id:int,data:ParlayOddsUpdateIn,_:str=Depends(auth)
         raise HTTPException(422,"每个SP必须是大于或等于1的有效数字")
     with TASK_LOCK:
         with conn() as c:
-            parent=c.execute("SELECT status FROM parlay_tickets WHERE id=?",(parlay_id,)).fetchone()
+            parent=c.execute("SELECT status, multiples, unit_stake FROM parlay_tickets WHERE id=?",(parlay_id,)).fetchone()
             if not parent:raise HTTPException(404,"Parlay ticket not found")
             if parent["status"] in {"won","lost"}:
                 raise HTTPException(409,"已结算的过关票不能修改SP")
             current=load_parlay(parlay_id)
-            if current and evaluate_parlay(*current)["status"] in {"won","lost"}:
-                raise HTTPException(409,"比赛已完成结算，不能修改过关票SP")
+            evaluated=evaluate_parlay(*current) if current else None
+            if evaluated and evaluated["final"]:
+                raise HTTPException(409,"比赛已完成结算，不能修改过关票")
             legs=[dict(row) for row in c.execute(
                 "SELECT * FROM parlay_legs WHERE parlay_id=? ORDER BY leg_index",(parlay_id,))]
             updates={item.leg_id:item.odds for item in data.legs}
@@ -1150,8 +1152,10 @@ def update_parlay_odds(parlay_id:int,data:ParlayOddsUpdateIn,_:str=Depends(auth)
                 for choice,value in zip(choices,odds):choice["odds"]=float(value)
                 c.execute("UPDATE parlay_legs SET odds=?,selections_json=? WHERE id=? AND parlay_id=?",
                     (str(choices[0]["odds"]),json.dumps(choices,ensure_ascii=False,separators=(",",":")),leg["id"],parlay_id))
-            c.execute("UPDATE parlay_tickets SET updated_at=? WHERE id=?",
-                (datetime.now(timezone.utc).isoformat(),parlay_id))
+            multiple=data.multiples if data.multiples is not None else int(parent["multiples"])
+            total=Decimal(str(parent["unit_stake"]))*multiple*evaluated["combination_count"]
+            c.execute("UPDATE parlay_tickets SET multiples=?,total_stake=?,updated_at=? WHERE id=?",
+                (multiple,float(total),datetime.now(timezone.utc).isoformat(),parlay_id))
     result=sync_parlay(parlay_id,send_notice=False)
     return result or {"ok":True}
 

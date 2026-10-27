@@ -25,7 +25,7 @@
   let legs = [];
   let bindingIndex = null;
   let submitting = false;
-  const editingParlays=new Set(),parlayOddsDrafts=new Map(),savingParlays=new Set();
+  const editingParlays=new Set(),parlayOddsDrafts=new Map(),parlayMultipleDrafts=new Map(),savingParlays=new Set();
 
   const money = value => "¥" + Number(value || 0).toFixed(2);
   const roundTicket = value => Math.round(value * 100 + 1e-8) / 100;
@@ -286,7 +286,7 @@
     const cardAge=parlayCardAge(ticket);
     if(cardAge==="hidden")return;
     const ticketKey=String(ticket.id),isFinal=Boolean(ticket.final);
-    if(isFinal){editingParlays.delete(ticketKey);parlayOddsDrafts.delete(ticketKey)}
+    if(isFinal){editingParlays.delete(ticketKey);parlayOddsDrafts.delete(ticketKey);parlayMultipleDrafts.delete(ticketKey)}
     const editing=editingParlays.has(ticketKey)&&!isFinal;
     const box=document.createElement("article");box.className="parlay-ticket"+(cardAge==="old"?" parlay-finished-old":cardAge==="finished"?" parlay-finished":"");
     const top=document.createElement("div");top.className="row";
@@ -331,18 +331,23 @@
     const exportImage=document.createElement("button");exportImage.type="button";exportImage.className="subtle";exportImage.textContent="导出投注图片";exportImage.onclick=()=>createParlayTicketImage(ticket).catch(error=>alert(error.message));actions.append(exportImage);
     const editStatus=document.createElement("p");editStatus.className="small parlay-edit-status";editStatus.setAttribute("role","status");
     if(editing){
-      editStatus.textContent="可修改各项SP；保存后会按新SP重新计算返奖。已完成结算的票不能修改。";box.append(editStatus);
-      const save=document.createElement("button");save.type="button";save.textContent=savingParlays.has(ticketKey)?"正在保存…":"保存SP";save.disabled=savingParlays.has(ticketKey);save.onclick=async()=>{
+      const multipleRow=document.createElement("label");multipleRow.className="parlay-odds-row";
+      const multipleCaption=document.createElement("span");multipleCaption.textContent="投注倍数";
+      const multipleInput=input("number",parlayMultipleDrafts.get(ticketKey)??String(ticket.multiples),{min:"1",max:"10000",step:"1","aria-label":"投注倍数"});
+      multipleInput.oninput=()=>parlayMultipleDrafts.set(ticketKey,multipleInput.value);multipleRow.append(multipleCaption,multipleInput);box.append(multipleRow);
+      editStatus.textContent="可修改倍数和各项SP；保存后重新计算投入、返奖和盈亏。已完成结算的票不能修改。";box.append(editStatus);
+      const save=document.createElement("button");save.type="button";save.textContent=savingParlays.has(ticketKey)?"正在保存…":"保存修改";save.disabled=savingParlays.has(ticketKey);save.onclick=async()=>{
         const draft=parlayOddsDrafts.get(ticketKey)||{},legs=[];
         for(const leg of ticket.legs||[]){const values=draft[leg.id]||ticketPicks(leg).map(pick=>String(pick.odds));if(values.length!==ticketPicks(leg).length){editStatus.textContent="投注项数量已变化，请刷新后重试。";return}for(const value of values){const odds=Number(value);if(!String(value).trim()||!Number.isFinite(odds)||odds<1){editStatus.textContent="SP必须是大于或等于1的有效数字。";return}}legs.push({leg_id:leg.id,odds:values.map(Number)})}
+        const multiple=Number(multipleInput.value);if(!multipleInput.value.trim()||!Number.isInteger(multiple)||multiple<1||multiple>10000){editStatus.textContent="倍数必须为1至10000之间的整数。";return}
         savingParlays.add(ticketKey);save.disabled=true;save.textContent="正在保存…";
-        try{await core.req(`/api/parlays/${ticket.id}/odds`,{method:"PUT",body:JSON.stringify({legs})});editingParlays.delete(ticketKey);parlayOddsDrafts.delete(ticketKey);await loadParlays()}
-        catch(error){editStatus.textContent="保存SP失败："+(error.message||String(error))}
-        finally{savingParlays.delete(ticketKey);save.disabled=false;save.textContent="保存SP"}
+        try{const updated=await core.req(`/api/parlays/${ticket.id}/odds`,{method:"PUT",body:JSON.stringify({legs,multiples:multiple})});if(Number(updated.multiples)!==multiple)throw Error("后台尚未支持倍数修改，请更新并重启后台后重试；SP可能已保存。");editingParlays.delete(ticketKey);parlayOddsDrafts.delete(ticketKey);parlayMultipleDrafts.delete(ticketKey);await loadParlays()}
+        catch(error){editStatus.textContent="保存失败："+(error.message||String(error))}
+        finally{savingParlays.delete(ticketKey);save.disabled=false;save.textContent="保存修改"}
       };
-      const cancel=document.createElement("button");cancel.type="button";cancel.className="subtle";cancel.textContent="取消修改";cancel.onclick=()=>{editingParlays.delete(ticketKey);parlayOddsDrafts.delete(ticketKey);loadParlays()};actions.append(save,cancel);
+      const cancel=document.createElement("button");cancel.type="button";cancel.className="subtle";cancel.textContent="取消修改";cancel.onclick=()=>{editingParlays.delete(ticketKey);parlayOddsDrafts.delete(ticketKey);parlayMultipleDrafts.delete(ticketKey);loadParlays()};actions.append(save,cancel);
     }else{
-      const edit=document.createElement("button");edit.type="button";edit.className="subtle";edit.textContent="修改SP";edit.disabled=isFinal;edit.title=isFinal?"已结算的过关票不能修改SP":"修改各比赛投注项的票面SP";edit.onclick=()=>{const draft={};for(const leg of ticket.legs||[])draft[leg.id]=ticketPicks(leg).map(pick=>String(pick.odds));parlayOddsDrafts.set(ticketKey,draft);editingParlays.add(ticketKey);loadParlays()};actions.append(edit);
+      const edit=document.createElement("button");edit.type="button";edit.className="subtle";edit.textContent="修改倍数 / SP";edit.disabled=isFinal;edit.title=isFinal?"已结算的过关票不能修改":"修改投注倍数及各比赛投注项的票面SP";edit.onclick=()=>{const draft={};for(const leg of ticket.legs||[])draft[leg.id]=ticketPicks(leg).map(pick=>String(pick.odds));parlayOddsDrafts.set(ticketKey,draft);parlayMultipleDrafts.set(ticketKey,String(ticket.multiples));editingParlays.add(ticketKey);loadParlays()};actions.append(edit);
     }
     const stop=document.createElement("button");stop.type="button";stop.className="subtle";stop.textContent="停止过关监测";stop.disabled=["stopped","won","lost"].includes(ticket.status);stop.onclick=async()=>{if(!confirm("停止这张过关票的监测？共享的单场监测任务仍会保留。"))return;try{await core.req(`/api/parlays/${ticket.id}/stop`,{method:"POST"});await loadParlays()}catch(error){alert(error.message)}};const remove=document.createElement("button");remove.type="button";remove.className="danger";remove.textContent="删除过关票";remove.onclick=async()=>{if(!confirm("删除这张过关票记录？比赛监测任务不会删除。"))return;try{await core.req(`/api/parlays/${ticket.id}`,{method:"DELETE"});await loadParlays()}catch(error){alert(error.message)}};actions.append(stop,remove);box.append(actions);host.append(box);
   }
