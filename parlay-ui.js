@@ -298,7 +298,7 @@
       const bubble=document.createElement("span");bubble.className="payout-badge";
       const caption=document.createElement("span");caption.className="payout-badge-label";caption.textContent=isFinal?"返奖总额":"已确认返奖";
       const amount=document.createElement("strong");amount.className="payout-badge-amount";amount.textContent=money(confirmedPayout);
-      bubble.setAttribute("aria-label",caption.textContent+" "+amount.textContent);bubble.append(caption,amount);indicators.append(bubble);
+      bubble.setAttribute("aria-label",caption.textContent+" "+amount.textContent);bubble.append(caption,amount);box.append(bubble);
     }
     top.append(title,indicators);box.append(top);
     const totals=document.createElement("p");totals.className="notice";totals.textContent=`总投入 ${money(ticket.total_stake)}${ticket.declared_payout?` · 票面最高奖 ${money(ticket.declared_payout)}${ticket.payout_matches_ticket===false?"（与当前SP不符）":""}`:""} · 已确认返奖 ${money(ticket.payout)} · ${ticket.net===null?`待结算${ticket.max_possible_payout===null?"":`，最高可能返奖 ${money(ticket.max_possible_payout)}`}`:`净利润 ${ticket.net>=0?"+":""}${money(ticket.net)}`}`;box.append(totals);
