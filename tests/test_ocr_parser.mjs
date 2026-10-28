@@ -556,6 +556,9 @@ test('uses pinned PaddleOCR.js PP-OCRv5 in the browser with Tesseract fallback',
   assert.match(uiSource, /ocrVersion: "PP-OCRv5"/);
   assert.match(uiSource, /backend: "wasm"/);
   assert.match(uiSource, /PaddleOCR\.create/);
+  assert.match(uiSource, /worker: false/);
+  assert.match(uiSource, /createPaddle = async \(\) => PaddleOCR\.create\(\{ \.\.\.paddleOcrOptions, worker: false \}\)/);
+  assert.doesNotMatch(uiSource, /createPaddle\(true\)/);
   assert.match(uiSource, /createTesseractWorker/);
   assert.match(uiSource, /recognizeBatch/);
   assert.match(uiSource, /图片仅在本机浏览器识别/);
