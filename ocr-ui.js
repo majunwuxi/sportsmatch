@@ -361,7 +361,9 @@
   const paddleOcrOptions = {
     lang: "ch",
     ocrVersion: "PP-OCRv5",
-    worker: true,
+    // A CDN-hosted module worker is cross-origin from the app and is blocked by browsers.
+    // The main-thread pipeline keeps PaddleOCR local to this page without that worker entry.
+    worker: false,
     ortOptions: {
       backend: "wasm",
       wasmPaths: "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/",
@@ -389,9 +391,9 @@
     let PaddleOCR;
     let paddle = null;
     let tesseract = null;
-    let engine = "paddle-worker";
+    let engine = "paddle-main";
     let fallbackNotice = "";
-    const createPaddle = async (worker) => PaddleOCR.create({ ...paddleOcrOptions, worker });
+    const createPaddle = async () => PaddleOCR.create({ ...paddleOcrOptions, worker: false });
     const getTesseract = async (reason) => {
       if (!tesseract) {
         fallbackNotice = reason ? ocrErrorMessage(reason) : "PaddleOCR.js不可用";
@@ -406,7 +408,7 @@
       return tesseract;
     };
 
-    setOcrStatus("正在载入 PaddleOCR.js（PP-OCRv5）…首次使用需要联网下载模型。");
+    setOcrStatus("正在载入 PaddleOCR.js（PP-OCRv5，浏览器主线程模式）…首次使用需要联网下载模型。");
     try {
       ({ PaddleOCR } = await import("https://cdn.jsdelivr.net/npm/@paddleocr/paddleocr-js@0.4.2/dist/index.mjs"));
     } catch (error) {
@@ -414,19 +416,10 @@
     }
 
     if (!tesseract) {
-      let workerError = null;
       try {
-        paddle = await createPaddle(true);
+        paddle = await createPaddle();
       } catch (error) {
-        workerError = error;
-        setOcrStatus("PaddleOCR Worker初始化失败（" + ocrErrorMessage(error) + "），正在尝试浏览器主线程模式…");
-        try {
-          paddle = await createPaddle(false);
-          engine = "paddle-main";
-        } catch (mainThreadError) {
-          await getTesseract("初始化失败。Worker：" + ocrErrorMessage(workerError)
-            + "；主线程：" + ocrErrorMessage(mainThreadError));
-        }
+        await getTesseract("PaddleOCR主线程初始化失败：" + ocrErrorMessage(error));
       }
     }
 
@@ -435,30 +428,15 @@
     async function runPaddle(images) {
       try {
         return await paddle.predict(images);
-      } catch (workerError) {
-        if (engine === "paddle-worker") {
-          setOcrStatus("PaddleOCR Worker识别失败（" + ocrErrorMessage(workerError) + "），正在切换浏览器主线程模式…");
-          try {
-            try { await paddle.dispose(); } catch { /* A crashed worker can reject disposal; still retry on the main thread. */ }
-            paddle = await createPaddle(false);
-            engine = "paddle-main";
-            setOcrStatus("PaddleOCR.js已切换到浏览器主线程，继续本地识别…");
-            return await paddle.predict(images);
-          } catch (mainThreadError) {
-            await getTesseract("识别失败。Worker：" + ocrErrorMessage(workerError)
-              + "；主线程：" + ocrErrorMessage(mainThreadError));
-          }
-        } else {
-          await getTesseract("PaddleOCR主线程识别失败：" + ocrErrorMessage(workerError));
-        }
+      } catch (error) {
+        await getTesseract("PaddleOCR主线程识别失败：" + ocrErrorMessage(error));
         return null;
       }
     }
 
     return {
       get engineName() {
-        return engine === "paddle-worker" ? "PaddleOCR.js（PP-OCRv5）"
-          : engine === "paddle-main" ? "PaddleOCR.js（PP-OCRv5，主线程）"
+        return engine === "paddle-main" ? "PaddleOCR.js（PP-OCRv5，主线程）"
             : "Tesseract.js（备用）";
       },
       get fallbackNotice() { return fallbackNotice; },
