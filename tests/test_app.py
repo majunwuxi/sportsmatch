@@ -263,6 +263,42 @@ def _parlay_body():
         {'fixture_id':12,'market':'match_result','selection':'胜','odds':1.220},
         {'fixture_id':13,'market':'match_result','selection':'胜','odds':1.530}]}
 
+def test_multileg_basketball_parlay_reuses_recent_schedule_response(client,monkeypatch):
+    games=[{'id':game_id,'date':'2026-10-28','datetime':'2026-10-28T23:00:00Z','status':'7:00 pm ET',
+        'home_team':{'full_name':f'Home {game_id}'},'visitor_team':{'full_name':f'Away {game_id}'},
+        'postseason':False,'ist_stage':None} for game_id in range(501,506)]
+    calls=[]
+    def provider(endpoint,params=None,league_code='nba'):
+        calls.append((endpoint,params,league_code))
+        assert endpoint=='games'
+        return {'data':games}
+    monkeypatch.setattr(m,'balldontlie_api',provider)
+    schedule=client.get('/api/fixtures?date=2026-10-29&sport=basketball&league_code=nba',auth=('test','test-password'))
+    assert schedule.status_code==200,schedule.text
+    assert len(schedule.json())==5
+    body={'pass_type':'5串1','multiples':2,'unit_stake':2,'declared_total':4,'legs':[
+        {'fixture_id':game['id'],'sport':'basketball','league_code':'nba','market':'basketball_total',
+         'selection':'大','odds':1.6,'line':220.5} for game in games]}
+    created=client.post('/api/parlays',auth=('test','test-password'),json=body)
+    assert created.status_code==200,created.text
+    assert len(calls)==1 and calls[0][0]=='games'
+    with m.conn() as c:
+        assert c.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]==5
+        assert c.execute('SELECT COUNT(*) FROM parlay_legs').fetchone()[0]==5
+
+def test_basketball_parlay_with_missing_schedule_cache_fails_fast(client,monkeypatch):
+    calls=[]
+    monkeypatch.setattr(m,'balldontlie_api',lambda *args,**kwargs:calls.append((args,kwargs)))
+    body={'pass_type':'2串1','multiples':1,'unit_stake':2,'legs':[
+        {'fixture_id':601,'sport':'basketball','league_code':'nba','market':'basketball_result','selection':'主胜','odds':1.5},
+        {'fixture_id':602,'sport':'basketball','league_code':'nba','market':'basketball_result','selection':'客胜','odds':1.5}]}
+    response=client.post('/api/parlays',auth=('test','test-password'),json=body)
+    assert response.status_code==409
+    assert '重新搜索并绑定' in response.json()['detail']
+    assert calls==[]
+    with m.conn() as c:
+        assert c.execute('SELECT COUNT(*) FROM parlay_tickets').fetchone()[0]==0
+
 def test_parlay_settlement_reuses_existing_total_goals_watchers(client,monkeypatch):
     _seed_task(12,'Inter','Fiorentina')
     _seed_task(13,'Barcelona','Real Madrid')

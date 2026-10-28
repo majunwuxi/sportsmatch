@@ -24,6 +24,7 @@ STOP=threading.Event()
 LOCK=threading.Lock()
 BALLDONTLIE_LOCK=threading.Lock()
 BALLDONTLIE_LAST_REQUEST=0.0
+BALLDONTLIE_FIXTURE_CACHE_TTL_SECONDS=30*60
 TASK_LOCK=threading.RLock()
 POLL_ENABLED=os.getenv("ENABLE_POLLER","false").lower()=="true"
 LISTED_WINS={"1:0","2:0","2:1","3:0","3:1","3:2","4:0","4:1","4:2","5:0","5:1","5:2"}
@@ -101,6 +102,13 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS usage (
           utc_day TEXT PRIMARY KEY, requests INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS basketball_fixture_cache (
+          league_code TEXT NOT NULL,
+          provider_game_id TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          fetched_at REAL NOT NULL,
+          PRIMARY KEY(league_code,provider_game_id)
         );
         CREATE TABLE IF NOT EXISTS parlay_tickets (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -230,6 +238,33 @@ def balldontlie_api(endpoint,params=None,league_code="nba"):
             raise HTTPException(502,"BallDontLie 返回了无法识别的比赛数据")
         return result
 
+def cache_basketball_fixtures(league_code,games):
+    now=time.time()
+    rows=[]
+    for game in games:
+        try:provider_game_id=str(int(game["id"]))
+        except (KeyError,TypeError,ValueError):continue
+        rows.append((league_code,provider_game_id,json.dumps(game,ensure_ascii=False,separators=(",",":")),now))
+    if not rows:return
+    with conn() as c:
+        c.executemany("""INSERT INTO basketball_fixture_cache(league_code,provider_game_id,payload_json,fetched_at)
+            VALUES (?,?,?,?) ON CONFLICT(league_code,provider_game_id) DO UPDATE SET
+            payload_json=excluded.payload_json,fetched_at=excluded.fetched_at""",rows)
+        c.execute("DELETE FROM basketball_fixture_cache WHERE fetched_at<?",(now-BALLDONTLIE_FIXTURE_CACHE_TTL_SECONDS,))
+
+def cached_basketball_fixture(league_code,provider_game_id):
+    with conn() as c:
+        row=c.execute("SELECT payload_json,fetched_at FROM basketball_fixture_cache WHERE league_code=? AND provider_game_id=?",
+            (league_code,str(int(provider_game_id)))).fetchone()
+        if not row:return None
+        if time.time()-float(row["fetched_at"])>BALLDONTLIE_FIXTURE_CACHE_TTL_SECONDS:
+            c.execute("DELETE FROM basketball_fixture_cache WHERE league_code=? AND provider_game_id=?",
+                (league_code,str(int(provider_game_id))))
+            return None
+        try:payload=json.loads(row["payload_json"])
+        except (TypeError,json.JSONDecodeError):return None
+        return payload if isinstance(payload,dict) else None
+
 def _bdl_state(game):
     state=str(game.get("status_state") or "").strip().lower()
     if state in {"scheduled","in_progress","final","postponed","canceled","delayed","suspended","abandoned","unknown"}:
@@ -277,6 +312,7 @@ def basketball_fixtures(date_value,q="",league_code="nba"):
     result=balldontlie_api("games",{"start_date":api_start,"end_date":api_end,"per_page":100},league_code)
     games=result.get("data")
     if not isinstance(games,list):raise HTTPException(502,f"BallDontLie 返回的 {league_code.upper()} 赛程格式无效")
+    cache_basketball_fixtures(league_code,games)
     term=str(q or "").strip().casefold()
     matches=[]
     for game in games:
@@ -1060,8 +1096,9 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
         internal_id=internal_ids[id(leg)]
         if internal_id in existing:continue
         if leg.sport=="basketball":
-            payload=balldontlie_api(f"games/{leg.fixture_id}",league_code=leg.league_code)
-            fixture=payload.get("data")
+            fixture=cached_basketball_fixture(leg.league_code,leg.fixture_id)
+            if fixture is None:
+                raise HTTPException(409,f"第{data.legs.index(leg)+1}场比赛的赛程校验资料已过期或缺失，请重新搜索并绑定该比赛后再创建。")
             if not isinstance(fixture,dict) or int(fixture.get("id",0))!=leg.fixture_id:
                 raise HTTPException(422,f"第{data.legs.index(leg)+1}场比赛无法在 {leg.league_code.upper()} 数据中核实")
             home=(fixture.get("home_team") or {}).get("full_name") or ""
