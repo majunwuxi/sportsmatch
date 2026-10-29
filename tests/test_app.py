@@ -1,4 +1,5 @@
 import os
+import json
 os.environ['ADMIN_USER']='test'
 os.environ['ADMIN_PASSWORD']='test-password'
 os.environ['ENABLE_POLLER']='false'
@@ -792,6 +793,8 @@ def test_team_map_asset_is_authenticated_and_contains_team_badges(client):
     assert 'MatchMonitorTeamDirectory' in response.text
     assert 'Club Brugge KV' in response.text and '布鲁日' in response.text
     assert 'Fagiano Okayama' in response.text and '冈山绿雉' in response.text
+    directory=json.loads(response.text.split('=',1)[1].rstrip(';\n'))
+    assert directory['512']=={'name_en':'Frosinone','name_zh':'弗洛西诺','country':'Italy','logo':'https://thumb.wikimedia.org/wikipedia/en/thumb/0/0b/Frosinone_Calcio_logo.svg/1280px-Frosinone_Calcio_logo.svg.png','leagues':'SERIEA'}
     assert 'https://media.api-sports.io/football/teams/569.png' in response.text
     assert 'https://thumb.wikimedia.org/wikipedia/en/thumb/0/07/Fagiano_Okayama_logo.svg/960px-Fagiano_Okayama_logo.svg.png?utm_source=en.wikipedia.org&utm_campaign=imageinfo&utm_content=thumbnail' in response.text
 
