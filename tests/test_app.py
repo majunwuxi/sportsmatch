@@ -880,6 +880,8 @@ def test_statistics_noon_boundary_history_pending_and_loss(client, monkeypatch):
     days=response.json()['days']
     assert days['2026-10-26']=={'stake':10.0,'payout':0.0,'settled_stake':10.0,'net':-10.0,'pending':0}
     assert days['2026-10-27']=={'stake':10.0,'payout':0.0,'settled_stake':0.0,'net':0.0,'pending':1}
+    details=response.json()['details']['2026-10-26'][0]
+    assert details['matches']==[{'home':'A','away':'B','home_cn':'','away_cn':''}]
 
 def test_statistics_parlay_uses_first_kickoff_and_updates_result(client, monkeypatch):
     with m.conn() as c:
@@ -889,6 +891,8 @@ def test_statistics_parlay_uses_first_kickoff_and_updates_result(client, monkeyp
     monkeypatch.setattr(m,'evaluate_parlay',lambda *args:{'combinations':[{'stake':10,**state}],'pass_type':'2串1','total_stake':10,'payout':state['payout'] or 0,'net':None if state['state']=='pending' else state['payout']-10,'legs':[]})
     day=client.get('/api/statistics',auth=('test','test-password')).json()['days']['2026-10-26']
     assert (day['stake'],day['pending'],day['net'])==(10,1,0)
+    details=client.get('/api/statistics',auth=('test','test-password')).json()['details']['2026-10-26'][0]
+    assert details['matches']==[{'home':'A','away':'B','home_cn':'','away_cn':''},{'home':'C','away':'D','home_cn':'','away_cn':''}]
     state.update(state='won',payout=18)
     day=client.get('/api/statistics',auth=('test','test-password')).json()['days']['2026-10-26']
     assert (day['stake'],day['pending'],day['payout'],day['net'])==(10,0,18,8)
