@@ -245,7 +245,7 @@
     ctx.fillStyle="#b8d5c3";ctx.font="700 14px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText("MATCH MONITOR  /  SPORTS LOTTERY PARLAY",pad,38,contentWidth);
     ctx.fillStyle="#fff";ctx.font="800 34px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText(data[0]?.sport==="basketball"?"竞彩篮球过关票":"竞彩足球过关票",pad,91,contentWidth);
     ctx.fillStyle="#dce9df";ctx.font="600 17px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";
-    ctx.fillText(`${ticket.pass_type}  ·  ${ticket.multiples}倍  ·  ${ticket.combination_count}注`,pad,132,contentWidth);
+    ctx.fillText(`过关票 #${ticket.id}  ·  ${ticket.pass_type}  ·  ${ticket.multiples}倍  ·  ${ticket.combination_count}注`,pad,132,contentWidth);
     let y=headerHeight+18;
     for(let index=0;index<data.length;index++){
       const leg=data[index],picks=picksByLeg[index],height=cardHeights[index],x=pad;
@@ -279,7 +279,7 @@
     const blob=await new Promise((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(Error("图片生成失败，请重试")),"image/png"));
     const url=URL.createObjectURL(blob),dialog=$("ticketImageDialog"),previous=dialog.dataset.previewUrl;
     dialog.dataset.previewUrl=url;dialog.dataset.downloadName=`竞彩过关票_${ticket.pass_type}_${ticket.multiples}倍_${ticket.id}.png`;
-    $("ticketImagePreview").src=url;$("ticketImageTitle").textContent=`过关票图片 · ${ticket.pass_type} · ${ticket.multiples}倍`;
+    $("ticketImagePreview").src=url;$("ticketImageTitle").textContent=`过关票 #${ticket.id} · ${ticket.pass_type} · ${ticket.multiples}倍`;
     $("downloadTicketImage").hidden=false;if(previous)URL.revokeObjectURL(previous);if(!dialog.open)dialog.showModal();
   }
   function renderTicket(host,ticket) {
