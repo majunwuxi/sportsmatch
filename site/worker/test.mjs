@@ -178,3 +178,47 @@ test('finished winning task cards show the total payout in a bubble',async()=>{c
 
 test('statistics details render Chinese and English team names',async()=>{const html=await (await worker.fetch(req('/'))).text();assert.match(html,/Array\.isArray\(item\.matches\)&&item\.matches\.length/);assert.match(html,/teamNameZh\(match\.home,match\.home_cn\)\+" vs "\+teamNameZh\(match\.away,match\.away_cn\)/);assert.match(html,/english\.textContent=match\.home\+" vs "\+match\.away/)});
 test('parlay image heading shows the ticket sequence number',async()=>{const source=await (await worker.fetch(req('/parlay-ui.js'))).text();assert.match(source,/ctx\.fillText\(`过关票 #\$\{ticket\.id\}/);assert.match(source,/过关票 #\$\{ticket\.id\} · \$\{ticket\.pass_type\}/)});
+
+test('statistics details highlight settled net profit and loss and leave pending items neutral',async()=>{
+  const html=await (await worker.fetch(req('/'))).text();
+  assert.match(html,/\.stats-detail-profit\{background:#bb2222;border-color:#a51d1d;color:#fff\}/);
+  assert.match(html,/\.stats-detail-loss\{background:#171717;border-color:#171717;color:#fff\}/);
+  assert.match(html,/\.stats-settlement-profit\{background:#b27b00\}/);
+  assert.match(html,/\.stats-settlement-loss\{background:#16803d\}/);
+  const start=html.indexOf('function showDetails(key){'),end=html.indexOf('function render(){',start);
+  assert.ok(start>=0&&end>start);
+  class Element{
+    constructor(tag){this.tag=tag;this.children=[];this.className='';this.textContent='';this.dataset={}}
+    append(...items){this.children.push(...items)}
+    replaceChildren(...items){this.children=[...items]}
+  }
+  const host=new Element('div'),context={
+    data:{details:{'2026-10-30':[
+      {type:'single',id:1,match:'A vs B',market:'胜平负',selection:'主胜',kickoff:'2026-10-30T00:00:00Z',stake:10,payout:18,net:8},
+      {type:'parlay',id:2,match:'C vs D',market:'2串1',selection:'组合',kickoff:'2026-10-30T00:00:00Z',stake:4,payout:0,net:-4},
+      {type:'single',id:3,match:'E vs F',market:'胜平负',selection:'平',kickoff:'2026-10-30T00:00:00Z',stake:2,payout:2,net:0},
+      {type:'single',id:4,match:'G vs H',market:'总进球',selection:'2',kickoff:'2026-10-30T00:00:00Z',stake:10,payout:3,net:null}
+    ]}},
+    $:()=>host,
+    money:value=>'¥'+Number(value||0).toFixed(2),
+    teamNameZh:(name,zh)=>zh||name,
+    formatKickoffBeijing:()=> '2026/10/30 08:00',
+    document:{createElement:tag=>new Element(tag),createTextNode:text=>{const node=new Element('#text');node.textContent=text;return node}}
+  };
+  vm.runInNewContext(html.slice(start,end)+'\nglobalThis.renderStatsDetails=showDetails;',context);
+  context.renderStatsDetails('2026-10-30');
+  const cards=host.children.filter(node=>node.tag==='article');
+  assert.equal(cards.length,4);
+  assert.match(cards[0].className,/stats-detail-profit/);
+  assert.match(cards[1].className,/stats-detail-loss/);
+  assert.match(cards[2].className,/stats-detail-even/);
+  assert.equal(cards[3].className,'stats-detail');
+  const amount=card=>card.children.at(-1).children.find(node=>node.className.includes('stats-detail-settlement'));
+  assert.equal(amount(cards[0]).textContent,'结算盈亏 +¥8.00');
+  assert.match(amount(cards[0]).className,/stats-settlement-profit/);
+  assert.equal(amount(cards[1]).textContent,'结算盈亏 −¥4.00');
+  assert.match(amount(cards[1]).className,/stats-settlement-loss/);
+  assert.equal(amount(cards[2]).textContent,'结算盈亏 ¥0.00');
+  assert.equal(amount(cards[3]),undefined);
+  assert.equal(cards[3].children.at(-1).children[0].textContent,'投入 ¥10.00 · 待结算 · 已返 ¥3.00');
+});
