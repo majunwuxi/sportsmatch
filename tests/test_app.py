@@ -101,6 +101,20 @@ def test_other_score_uses_screenshot_sp_list_as_not_in_set():
     away=m.outcome(2,5,[{'market':'correct_score','selection':'负其它','stake':2,'odds':10}],listed_scores=['2:5'])
     assert away['tickets'][0]['won'] is False
 
+def test_exact_score_ticket_corrects_ocr_list_omission_and_settles_ticket():
+    tickets=[
+        {'market':'correct_score','selection':'2:0','stake':4,'odds':12.5},
+        {'market':'correct_score','selection':'2:1','stake':6,'odds':7.5},
+        {'market':'correct_score','selection':'3:0','stake':2,'odds':23},
+        {'market':'correct_score','selection':'1:0','stake':4,'odds':9},
+    ]
+    result=m.outcome(1,0,tickets,listed_scores=['2:0','2:1','3:0'])
+    assert result['selection']=='1:0'
+    assert [row['won'] for row in result['tickets']]==[False,False,False,True]
+    assert result['tickets'][3]['payout']==36
+    assert result['payout']==36
+    assert result['net']==20
+
 def test_task_persists_screenshot_sp_list_and_requires_confirmation(client,monkeypatch):
     monkeypatch.setattr(m,'api',lambda *a:[fixture()])
     body={'fixture_id':12,'home':'spoof','away':'spoof','start_at':datetime.now(timezone.utc).isoformat(),

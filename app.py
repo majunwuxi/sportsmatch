@@ -381,7 +381,13 @@ def ticket_matches(ticket,home,away,half_home=None,half_away=None,listed_scores=
     if home is None or away is None: return None
     market=ticket.get("market","correct_score")
     selection=ticket["selection"]
-    if market=="correct_score": return OTHER_SCORE_ALIASES.get(selection,selection)==score_category(home,away,listed_scores)
+    if market=="correct_score":
+        normalized=OTHER_SCORE_ALIASES.get(selection,selection)
+        actual=f"{home}:{away}"
+        # An explicit exact-score ticket proves that score was offered, even if
+        # OCR missed it in the screenshot list used for settling “other” bets.
+        if normalized in LISTED_SCORE_OPTIONS:return normalized==actual
+        return normalized==score_category(home,away,listed_scores)
     if market=="match_result": return football_result_value(selection)==score_result(home,away)
     if market=="handicap": return football_result_value(selection)==score_result(home+int(ticket["handicap"]),away)
     if market=="total_goals": return selection==("7+" if home+away>=7 else str(home+away))
@@ -410,9 +416,13 @@ def outcome(home,away,tickets,half_home=None,half_away=None,listed_scores=None):
     payout=Decimal(0)
     rows=[]
     by_market={}
+    exact_ticket_scores={OTHER_SCORE_ALIASES.get(t.get("selection"),t.get("selection"))
+        for t in tickets if t.get("market","correct_score")=="correct_score"
+        and OTHER_SCORE_ALIASES.get(t.get("selection"),t.get("selection")) in LISTED_SCORE_OPTIONS}
+    effective_listed_scores=(None if listed_scores is None else set(listed_scores)|exact_ticket_scores)
     for index,t in enumerate(tickets):
         stake=Decimal(str(t["stake"]))
-        won=ticket_matches(t,home,away,half_home,half_away,listed_scores)
+        won=ticket_matches(t,home,away,half_home,half_away,effective_listed_scores)
         amount=stake*Decimal(str(t["odds"])) if won else Decimal(0)
         payout+=amount
         market=t.get("market","correct_score")
@@ -430,7 +440,7 @@ def outcome(home,away,tickets,half_home=None,half_away=None,listed_scores=None):
     market_summaries=[{"market":g["market"],"market_label":g["market_label"],"total":money(g["total"]),"payout":money(g["payout"]),
         "net":money(g["payout"]-g["total"]) if g["pending_tickets"]==0 else None,"tickets":g["tickets"],"pending_tickets":g["pending_tickets"]}
         for g in by_market.values()]
-    selection=score_category(home,away,listed_scores) if home is not None and away is not None else None
+    selection=score_category(home,away,effective_listed_scores) if home is not None and away is not None else None
     has_score=home is not None and away is not None
     pending_tickets=sum(1 for row in rows if row["won"] is None)
     return {"selection":selection,"payout":money(payout),"net":money(payout-total) if has_score and pending_tickets==0 else None,"total":money(total),"tickets":rows,"market_summaries":market_summaries,"has_score":has_score,
