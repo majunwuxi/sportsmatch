@@ -144,7 +144,7 @@
         bindingIndex=index;document.body.classList.add("parlay-binding-active");$("closeParlayFixtureSearch").hidden=false;$("sport").value=leg.sport||"football";if(leg.sport==="basketball")$("basketballLeague").value=leg.league_code||"nba";core.updateSportInputs?.();const search=$("search");search.value=leg.home||"";$("fixtures").replaceChildren();$("parlayImportStatus").textContent=`正在为第${index+1}腿查找比赛。确认日期和球队名称后，点击“搜索比赛”，再点对应结果中的“绑定到第${index+1}腿”。`;
         $("fixtureSearch").scrollIntoView({behavior:"smooth",block:"start"});search.focus();
       };
-      const matchNoButton=document.createElement("button");matchNoButton.type="button";matchNoButton.className="subtle";matchNoButton.hidden=!leg.fixture_id||(leg.sport||"football")==="basketball";const updateMatchNoButton=()=>{const value=root.MatchMonitorSportteryNo?.get(leg)||"";matchNoButton.textContent=value?"竞彩编号："+value:"设置竞彩编号"};updateMatchNoButton();matchNoButton.onclick=async()=>{try{await root.MatchMonitorSportteryNo.load()}catch{}const current=root.MatchMonitorSportteryNo?.get(leg)||"",value=prompt("输入中国体育彩票竞彩足球编号（例如：周六010）。留空可清除；保存在服务器供已认证浏览器共用，不影响 API-Football 内部比赛 ID。",current);if(value===null)return;try{await root.MatchMonitorSportteryNo.set(leg,value);updateMatchNoButton()}catch(error){alert(error.message)}};
+      const matchNoButton=document.createElement("button");matchNoButton.type="button";matchNoButton.className="subtle";matchNoButton.hidden=!leg.fixture_id;const updateMatchNoButton=()=>{const value=root.MatchMonitorSportteryNo?.get(leg)||"";matchNoButton.textContent=value?"竞彩编号："+value:"设置竞彩编号"};updateMatchNoButton();matchNoButton.onclick=async()=>{try{await root.MatchMonitorSportteryNo.load()}catch{}const current=root.MatchMonitorSportteryNo?.get(leg)||"",value=prompt("输入中国体育彩票"+((leg.sport||"football")==="basketball"?"竞彩篮球":"竞彩足球")+"编号（例如："+((leg.sport||"football")==="basketball"?"周六301":"周六010")+"）。留空可清除；保存在服务器供已认证浏览器共用，不影响 API-Football 内部比赛 ID。",current);if(value===null)return;try{await root.MatchMonitorSportteryNo.set(leg,value);updateMatchNoButton()}catch(error){alert(error.message)}};
       const remove=document.createElement("button");remove.type="button";remove.className="danger";remove.textContent="删除本腿";remove.onclick=()=>{legs.splice(index,1);if(bindingIndex===index)closeFixtureSearch();else if(bindingIndex>index)bindingIndex--;renderLegs()};
       actions.append(bind,matchNoButton,remove);head.append(title,actions);box.append(head);
       const matchup=document.createElement("p");matchup.className="notice parlay-match";matchup.textContent=leg.fixture_id?`${leg.home} vs ${leg.away} · ${leg.league_name||"赛事"} · 北京时间 ${core.formatKickoffBeijing(leg.kickoff)}`:"请通过上方比赛搜索绑定真实比赛，文字识别不会自动猜测 fixture。";box.append(matchup);
@@ -239,7 +239,7 @@
     await numbers.load();
     const data=(ticket.legs||[]).map(leg=>({...leg}));
     for(const leg of data){
-      if((leg.sport||"football")==="basketball")continue;
+      
       const value=await numbers.ensure(leg);
       if(value===null)return;
       leg.sportteryMatchNo=value;
@@ -247,7 +247,7 @@
     const canvas=document.createElement("canvas"),ctx=canvas.getContext("2d");
     if(!ctx)throw Error("当前浏览器无法生成图片");
     const width=900,pad=42,contentWidth=width-pad*2,headerHeight=178,footerHeight=154;
-    const picksByLeg=data.map(ticketPicks),cardHeights=picksByLeg.map((picks,index)=>((data[index]?.sport||"football")==="basketball"?112:130)+Math.max(1,picks.length)*32);
+    const picksByLeg=data.map(ticketPicks),cardHeights=picksByLeg.map(picks=>130+Math.max(1,picks.length)*32);
     canvas.width=width;canvas.height=headerHeight+cardHeights.reduce((sum,height)=>sum+height+14,0)+footerHeight;
     const logoPairs=await Promise.all(data.map(leg=>Promise.all([loadParlayLogo(leg.home),loadParlayLogo(leg.away)])));
     ctx.fillStyle="#eef3ef";ctx.fillRect(0,0,width,canvas.height);
@@ -274,10 +274,10 @@
       ctx.fillStyle="#687a72";ctx.font="500 12px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText(leg.away||"",rightX-(awayLogo?44:0),y+76,Math.max(100,rightX-center-72));
       ctx.textAlign="center";ctx.fillStyle="#176348";ctx.font="800 15px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText("VS",center,y+60);
       ctx.textAlign="center";
-      if((leg.sport||"football")!=="basketball"){ctx.fillStyle="#146247";ctx.font="750 14px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText("中国体育彩票竞彩编号  "+leg.sportteryMatchNo,center,y+98,contentWidth-60)}
+      ctx.fillStyle="#146247";ctx.font="750 14px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText("中国体育彩票竞彩编号  "+leg.sportteryMatchNo,center,y+98,contentWidth-60);
       ctx.textAlign="left";
       for(let pickIndex=0;pickIndex<Math.max(1,picks.length);pickIndex++){
-        const pick=picks[pickIndex],label=pick?`${pick.market_label||MARKETS[pick.market]||"投注项"}  ${pickSelectionLabel(pick)}${ticketPickLine(pick)}`:"未识别投注项",rowY=y+((leg.sport||"football")==="basketball"?91:109)+pickIndex*32;
+        const pick=picks[pickIndex],label=pick?`${pick.market_label||MARKETS[pick.market]||"投注项"}  ${pickSelectionLabel(pick)}${ticketPickLine(pick)}`:"未识别投注项",rowY=y+109+pickIndex*32;
         ctx.fillStyle="#f3f7f4";ctx.fillRect(x+18,rowY,contentWidth-36,27);ctx.fillStyle="#315344";ctx.font="600 13px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText(label,x+30,rowY+18,contentWidth-60);
       }
       y+=height+14;
@@ -328,11 +328,11 @@
         }else row.append(document.createTextNode(pick.status_cn||leg.status_cn||"等待赛果"));
       });
       box.append(row);
-      if((leg.sport||"football")!=="basketball"){
+      if(leg.fixture_id){
         const matchNoButton=document.createElement("button");matchNoButton.type="button";matchNoButton.className="subtle";
         const updateMatchNoButton=()=>{const value=root.MatchMonitorSportteryNo?.get(leg)||"";matchNoButton.textContent=value?"竞彩编号："+value:"设置竞彩编号"};
         updateMatchNoButton();
-        matchNoButton.onclick=async()=>{try{await root.MatchMonitorSportteryNo.load()}catch{}const current=root.MatchMonitorSportteryNo?.get(leg)||"",value=prompt("输入中国体育彩票竞彩足球编号（例如：周六010）。留空可清除；保存在服务器供已认证浏览器共用，不影响 API-Football 内部比赛 ID。",current);if(value===null)return;try{await root.MatchMonitorSportteryNo.set(leg,value);updateMatchNoButton()}catch(error){alert(error.message)}};
+        matchNoButton.onclick=async()=>{try{await root.MatchMonitorSportteryNo.load()}catch{}const current=root.MatchMonitorSportteryNo?.get(leg)||"",value=prompt("输入中国体育彩票"+((leg.sport||"football")==="basketball"?"竞彩篮球":"竞彩足球")+"编号（例如："+((leg.sport||"football")==="basketball"?"周六301":"周六010")+"）。留空可清除；保存在服务器供已认证浏览器共用，不影响 API-Football 内部比赛 ID。",current);if(value===null)return;try{await root.MatchMonitorSportteryNo.set(leg,value);updateMatchNoButton()}catch(error){alert(error.message)}};
         box.append(matchNoButton);
       }
       if(editing){
