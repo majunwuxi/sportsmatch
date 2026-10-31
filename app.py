@@ -103,6 +103,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS usage (
           utc_day TEXT PRIMARY KEY, requests INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS sporttery_match_numbers (
+          match_key TEXT PRIMARY KEY,
+          number TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
         CREATE TABLE IF NOT EXISTS basketball_fixture_cache (
           league_code TEXT NOT NULL,
           provider_game_id TEXT NOT NULL,
@@ -625,6 +630,11 @@ class Ticket(BaseModel):
     handicap:float|None=Field(default=None,allow_inf_nan=False)
     line:float|None=Field(default=None,allow_inf_nan=False)
 
+class SportteryMatchNoIn(BaseModel):
+    key:str=Field(min_length=1,max_length=600)
+    number:str=Field(max_length=32)
+    only_if_missing:bool=False
+
 class TaskIn(BaseModel):
     fixture_id:int=Field(gt=0)
     sport:Literal["football","basketball"]="football"
@@ -922,6 +932,31 @@ def sync_parlays_for_fixture(fixture_id):
 def health(_:str=Depends(auth)):
     return {"ok":True,"poller":POLL_ENABLED,"timezone":"Asia/Shanghai","screenshot_score_lists":True,
         "parlay_monitoring":True,"basketball_monitoring":bool(balldontlie_key())}
+
+@app.get("/api/sporttery-match-nos")
+def get_sporttery_match_numbers(_:str=Depends(auth)):
+    with conn() as c:
+        rows=c.execute("SELECT match_key,number FROM sporttery_match_numbers ORDER BY updated_at DESC LIMIT 2000").fetchall()
+    return {"numbers":{str(row["match_key"]):str(row["number"]) for row in rows}}
+
+@app.put("/api/sporttery-match-nos")
+def put_sporttery_match_number(data:SportteryMatchNoIn,_:str=Depends(auth)):
+    key=data.key.strip()
+    number=data.number.strip()
+    if not key:
+        raise HTTPException(422,"比赛信息不完整，无法保存竞彩编号")
+    if len(key)>600 or len(number)>32:
+        raise HTTPException(422,"竞彩编号或比赛标识长度超出限制")
+    with conn() as c:
+        if not number:
+            c.execute("DELETE FROM sporttery_match_numbers WHERE match_key=?",(key,))
+            return {"number":""}
+        if data.only_if_missing:
+            c.execute("INSERT OR IGNORE INTO sporttery_match_numbers(match_key,number,updated_at) VALUES(?,?,CURRENT_TIMESTAMP)",(key,number))
+        else:
+            c.execute("INSERT INTO sporttery_match_numbers(match_key,number,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT(match_key) DO UPDATE SET number=excluded.number,updated_at=CURRENT_TIMESTAMP",(key,number))
+        saved=c.execute("SELECT number FROM sporttery_match_numbers WHERE match_key=?",(key,)).fetchone()
+    return {"number":str(saved["number"]) if saved else ""}
 
 @app.get("/api/fixtures")
 def fixtures(date:str=Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),q:str="",sport:Literal["football","basketball"]="football",
