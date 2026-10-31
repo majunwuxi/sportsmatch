@@ -277,8 +277,8 @@
       ctx.fillStyle="#146247";ctx.font="750 14px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText("中国体育彩票竞彩编号  "+leg.sportteryMatchNo,center,y+98,contentWidth-60);
       ctx.textAlign="left";
       for(let pickIndex=0;pickIndex<Math.max(1,picks.length);pickIndex++){
-        const pick=picks[pickIndex],label=pick?`${pick.market_label||MARKETS[pick.market]||"投注项"}     ${pickSelectionLabel(pick)}${ticketPickLine(pick)}`:"未识别投注项",rowY=y+109+pickIndex*32;
-        ctx.fillStyle="#f3f7f4";ctx.fillRect(x+18,rowY,contentWidth-36,27);ctx.fillStyle="#315344";ctx.font="600 13px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText(label,x+30,rowY+18,contentWidth-60);
+        const pick=picks[pickIndex],marketLabel=pick?(pick.market_label||MARKETS[pick.market]||"投注项"):"未识别投注项",resultLabel=pick?`${pickSelectionLabel(pick)}${ticketPickLine(pick)}`:"",rowY=y+109+pickIndex*32;
+        ctx.fillStyle="#f3f7f4";ctx.fillRect(x+18,rowY,contentWidth-36,27);ctx.fillStyle="#315344";ctx.font="600 13px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText(marketLabel,x+30,rowY+18,contentWidth*0.42);if(resultLabel){ctx.textAlign="center";ctx.fillText(resultLabel,x+contentWidth/2,rowY+18,contentWidth*0.48);ctx.textAlign="left";}
       }
       y+=height+14;
     }
