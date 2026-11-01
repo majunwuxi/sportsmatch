@@ -100,6 +100,7 @@ globalThis.MatchMonitorBasketballTeamDirectory = [
     "id": "1610612746",
     "abbreviation": "LAC",
     "name_en": "Los Angeles Clippers",
+    "aliases": ["LA Clippers", "Clippers", "L.A. Clippers"],
     "name_zh": "洛杉矶快船",
     "logo": "https://cdn.nba.com/logos/nba/1610612746/global/L/logo.svg"
   },
