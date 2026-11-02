@@ -643,7 +643,7 @@ class TaskIn(BaseModel):
     away:str
     kickoff:str|None=None
     start_at:str
-    interval_minutes:int=Field(default=10,ge=1,le=120)
+    interval_minutes:int|None=Field(default=None,ge=1,le=120)
     tickets:list[Ticket]=Field(default_factory=list,max_length=1000)
     listed_scores:list[str]|None=None
     listed_scores_verified:bool=False
@@ -675,7 +675,7 @@ class ParlayLegIn(BaseModel):
     line:float|None=Field(default=None,allow_inf_nan=False)
     selections:list[ParlaySelectionIn]|None=Field(default=None,max_length=24)
     start_at:str|None=None
-    interval_minutes:int=Field(default=10,ge=1,le=120)
+    interval_minutes:int|None=Field(default=None,ge=1,le=120)
 
 class ParlayIn(BaseModel):
     pass_type:str
@@ -1186,10 +1186,11 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
                             if start.tzinfo is None:raise ValueError()
                         except ValueError:raise HTTPException(422,"比赛腿开始监测时间必须带时区")
                     else:
-                        start=_utc_datetime(kickoff)+timedelta(minutes=150 if leg.sport=="basketball" else 120)
+                        start=_utc_datetime(kickoff)+timedelta(minutes=159 if leg.sport=="basketball" else 120)
+                    monitor_interval=leg.interval_minutes if leg.interval_minutes is not None else (5 if leg.sport=="basketball" else 10)
                     next_at=max(start.astimezone(timezone.utc),now).isoformat()
                     cur=c.execute("""INSERT INTO tasks(fixture_id,provider_game_id,league_code,sport,home,away,league_name,kickoff,start_at,interval_minutes,next_check,ticket_json,created_at,created_for_parlay)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",(internal_id,fixture["provider_game_id"],fixture["league_code"],fixture["sport"],fixture["home"],fixture["away"],fixture["league_name"],kickoff,start.isoformat(),leg.interval_minutes,next_at,"[]",created_at))
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",(internal_id,fixture["provider_game_id"],fixture["league_code"],fixture["sport"],fixture["home"],fixture["away"],fixture["league_name"],kickoff,start.isoformat(),monitor_interval,next_at,"[]",created_at))
                     current[internal_id]={"id":cur.lastrowid,"fixture_id":internal_id,"home":fixture["home"],"away":fixture["away"],"league_name":fixture["league_name"],"kickoff":kickoff,"status":"pending","enabled":1}
                 else:
                     row=current[internal_id]
@@ -1293,6 +1294,7 @@ def stop_unused_parlay_watchers(fixture_ids):
 @app.post("/api/tasks")
 def create_task(data:TaskIn,_:str=Depends(auth)):
     tickets=validate_tickets(data.tickets,data.sport)
+    monitor_interval=data.interval_minutes if data.interval_minutes is not None else (5 if data.sport=="basketball" else 10)
     listed_scores=validate_listed_scores(data.listed_scores)
     if data.sport=="basketball":
         if listed_scores is not None or data.listed_scores_verified:raise HTTPException(422,"竞彩比分清单只适用于足球任务")
@@ -1335,7 +1337,7 @@ def create_task(data:TaskIn,_:str=Depends(auth)):
     with conn() as c:
         try:
             cur=c.execute("""INSERT INTO tasks(fixture_id,provider_game_id,league_code,sport,home,away,league_name,kickoff,start_at,interval_minutes,next_check,ticket_json,listed_scores_json,listed_scores_verified,created_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(internal_fixture_id,provider_game_id,league_code,sport,home,away,league_name,kickoff_value,start.isoformat(),data.interval_minutes,next_at,json.dumps(tickets,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(data.listed_scores_verified),now))
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(internal_fixture_id,provider_game_id,league_code,sport,home,away,league_name,kickoff_value,start.isoformat(),monitor_interval,next_at,json.dumps(tickets,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(data.listed_scores_verified),now))
         except sqlite3.IntegrityError:raise HTTPException(409,"Fixture already monitored")
     return {"id":cur.lastrowid,"home":home,"away":away,"sport":sport,"league_code":league_code}
 
