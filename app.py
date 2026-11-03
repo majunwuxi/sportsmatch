@@ -1576,7 +1576,7 @@ def task_action(task_id:int,action:str,_:str=Depends(auth)):
 def usage(_:str=Depends(auth)):
     today=datetime.now(timezone.utc).strftime("%Y-%m-%d")
     with conn() as c:
-        row=c.execute("SELECT requests FROM "usage" WHERE utc_day=?",(today,)).fetchone()
+        row=c.execute('SELECT requests FROM "usage" WHERE utc_day=?',(today,)).fetchone()
     return {"day_utc":today,"used":row["requests"] if row else 0,"budget":int(os.getenv("API_DAILY_LIMIT","90"))}
 
 @app.get("/",response_class=HTMLResponse)
