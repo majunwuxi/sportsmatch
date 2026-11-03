@@ -352,10 +352,10 @@ def api(endpoint,params):
     with LOCK:
         with conn() as c:
             if not USE_POSTGRES:c.execute("BEGIN IMMEDIATE")
-            row=c.execute("SELECT requests FROM "usage" WHERE utc_day=?",(day,)).fetchone()
+            row=c.execute('SELECT requests FROM "usage" WHERE utc_day=?',(day,)).fetchone()
             used=row["requests"] if row else 0
             if used>=limit: raise RuntimeError("Daily API budget exhausted")
-            c.execute("INSERT INTO "usage"(utc_day,requests) VALUES (?,1) ON CONFLICT(utc_day) DO UPDATE SET requests=requests+1",(day,))
+            c.execute('INSERT INTO "usage"(utc_day,requests) VALUES (?,1) ON CONFLICT(utc_day) DO UPDATE SET requests=requests+1',(day,))
     q=urllib.parse.urlencode(params)
     result=request_json("https://v3.football.api-sports.io/"+endpoint+"?"+q, {"x-apisports-key":key})
     if result.get("errors"):raise RuntimeError(str(result["errors"]))
