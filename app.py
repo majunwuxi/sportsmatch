@@ -29,14 +29,26 @@ if not USE_POSTGRES:
 try:
     import psycopg
     from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
 except ImportError:
     psycopg=None
     dict_row=None
-if USE_POSTGRES and psycopg is None:
-    raise RuntimeError("DATABASE_URL is set but psycopg is not installed")
+    ConnectionPool=None
+if USE_POSTGRES and (psycopg is None or ConnectionPool is None):
+    raise RuntimeError("DATABASE_URL is set but psycopg and psycopg_pool must be installed")
 DB_INTEGRITY_ERRORS=(sqlite3.IntegrityError,)
 if psycopg is not None:
     DB_INTEGRITY_ERRORS+=(psycopg.IntegrityError,)
+POSTGRES_POOL=None
+if USE_POSTGRES:
+    POSTGRES_POOL=ConnectionPool(
+        conninfo=DATABASE_URL,
+        min_size=1,
+        max_size=max(1,int(os.getenv("DATABASE_POOL_MAX_SIZE","8"))),
+        timeout=10,
+        kwargs={"connect_timeout":10,"prepare_threshold":None,"row_factory":dict_row},
+        open=True,
+    )
 BASIC=HTTPBasic()
 STOP=threading.Event()
 LOCK=threading.Lock()
@@ -135,15 +147,14 @@ class PostgresConnectionAdapter:
 @contextmanager
 def conn():
     if USE_POSTGRES:
-        raw=psycopg.connect(DATABASE_URL,connect_timeout=10,prepare_threshold=None,row_factory=dict_row)
-        c=PostgresConnectionAdapter(raw)
-    else:
-        raw=sqlite3.connect(DB,timeout=15)
-        raw.row_factory=sqlite3.Row
-        raw.execute("PRAGMA foreign_keys=ON")
-        c=raw
+        with POSTGRES_POOL.connection() as raw:
+            yield PostgresConnectionAdapter(raw)
+        return
+    raw=sqlite3.connect(DB,timeout=15)
+    raw.row_factory=sqlite3.Row
+    raw.execute("PRAGMA foreign_keys=ON")
     try:
-        yield c
+        yield raw
         raw.commit()
     except BaseException:
         raw.rollback()
