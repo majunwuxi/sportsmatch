@@ -1208,17 +1208,28 @@ def statistics(_:str=Depends(auth)):
     days={}
     details={}
     missing=0
+    category_keys=("football_single","football_parlay","basketball_single","basketball_parlay")
+    def empty_bucket():
+        return {"stake":Decimal(0),"payout":Decimal(0),"settled_stake":Decimal(0),"pending":0,"items":0}
+    def empty_day():
+        day=empty_bucket()
+        day["breakdowns"]={category:empty_bucket() for category in category_keys}
+        return day
     def date_key(value):
         try:
             return (_utc_datetime(value).astimezone(TZ)-timedelta(hours=12)).date().isoformat() if value else None
         except (ValueError,TypeError,OverflowError):
             return None
-    def add(key,stake,payout,settled):
-        day=days.setdefault(key,{"stake":Decimal(0),"payout":Decimal(0),"settled_stake":Decimal(0),"pending":0})
-        day["stake"]+=Decimal(str(stake))
-        if settled:
-            day["settled_stake"]+=Decimal(str(stake));day["payout"]+=Decimal(str(payout or 0))
-        else:day["pending"]+=1
+    def add(key,category,stake,payout,settled):
+        day=days.setdefault(key,empty_day())
+        for bucket in (day,day["breakdowns"][category]):
+            bucket["stake"]+=Decimal(str(stake))
+            bucket["items"]+=1
+            if settled:
+                bucket["settled_stake"]+=Decimal(str(stake))
+                bucket["payout"]+=Decimal(str(payout or 0))
+            else:
+                bucket["pending"]+=1
     for task in tasks(_=_,include_history=True):
         picks=task.get("tickets") or []
         if not picks:continue
@@ -1227,7 +1238,8 @@ def statistics(_:str=Depends(auth)):
         result=task["settlement"]
         for pick in result["tickets"]:
             settled=task["status"]=="finished" and pick["won"] is not None
-            add(key,pick["stake"],pick["payout"],settled)
+            category="basketball_single" if task.get("sport")=="basketball" else "football_single"
+            add(key,category,pick["stake"],pick["payout"],settled)
             line=f"（让球/让分 {pick['handicap']}）" if pick.get("handicap") is not None else f"（总分 {pick['line']}）" if pick.get("line") is not None else ""
             home,away=task["home"],task["away"]
             details.setdefault(key,[]).append({"type":"single","id":task["id"],"kickoff":task.get("kickoff"),"match":home+" vs "+away,"matches":[{"home":home,"away":away,"home_cn":task.get("home_cn") or BASKETBALL_TEAM_NAMES_ZH.get(home,""),"away_cn":task.get("away_cn") or BASKETBALL_TEAM_NAMES_ZH.get(away,"")}],"market":pick["market_label"],"selection":f"{pick['selection']}{line} · SP {pick['odds']}","stake":pick["stake"],"payout":pick["payout"] if settled else None,"net":pick["payout"]-pick["stake"] if settled else None})
@@ -1241,10 +1253,31 @@ def statistics(_:str=Depends(auth)):
         key=min(keys)
         result=evaluate_parlay(parent,legs,linked_tasks)
         for combo in result["combinations"]:
-            add(key,combo["stake"],combo["payout"],combo["state"] in {"won","lost"})
+            category="basketball_parlay" if legs and legs[0].get("sport")=="basketball" else "football_parlay"
+            add(key,category,combo["stake"],combo["payout"],combo["state"] in {"won","lost"})
         detail_matches=[{"home":leg["home"],"away":leg["away"],"home_cn":leg.get("home_cn") or BASKETBALL_TEAM_NAMES_ZH.get(leg["home"],""),"away_cn":leg.get("away_cn") or BASKETBALL_TEAM_NAMES_ZH.get(leg["away"],"")} for leg in legs]
         details.setdefault(key,[]).append({"type":"parlay","id":parlay_id,"kickoff":min(legs,key=lambda leg:_utc_datetime(leg["kickoff"]))["kickoff"],"match":"；".join(leg["home"]+" vs "+leg["away"] for leg in legs),"matches":detail_matches,"market":result["pass_type"],"selection":"；".join(f"{leg['home']} vs {leg['away']}："+"、".join(f"{pick['market_label']} {pick['selection']} SP {pick['odds']}" for pick in leg["selections"]) for leg in result["legs"]),"stake":result["total_stake"],"payout":result["payout"],"net":result["net"],"pending":sum(combo["state"] not in {"won","lost"} for combo in result["combinations"])})
-    return {"days":{key:{"stake":float(v["stake"]),"payout":float(v["payout"]),"settled_stake":float(v["settled_stake"]),"net":float(v["payout"]-v["settled_stake"]),"pending":v["pending"]} for key,v in days.items()},"details":details,"missing_dates":missing}
+    return {"days":{
+        key:{
+            "stake":float(v["stake"]),
+            "payout":float(v["payout"]),
+            "settled_stake":float(v["settled_stake"]),
+            "net":float(v["payout"]-v["settled_stake"]),
+            "pending":v["pending"],
+            "breakdowns":{
+                category:{
+                    "stake":float(bucket["stake"]),
+                    "payout":float(bucket["payout"]),
+                    "settled_stake":float(bucket["settled_stake"]),
+                    "net":float(bucket["payout"]-bucket["settled_stake"]),
+                    "pending":bucket["pending"],
+                    "items":bucket["items"],
+                }
+                for category,bucket in v["breakdowns"].items()
+            },
+        }
+        for key,v in days.items()
+    },"details":details,"missing_dates":missing}
 
 @app.get("/api/parlays")
 def get_parlays(_:str=Depends(auth)):
