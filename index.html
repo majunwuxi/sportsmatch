@@ -5,7 +5,7 @@
 .stats-breakdown-card{min-width:0;padding:11px 13px;border:1px solid #dce6df;border-radius:10px;background:#f5f8f5;color:#18302e}
 .stats-breakdown-card strong{display:block;font-size:14px;margin-bottom:4px}
 .stats-breakdown-card p{margin:3px 0;font-size:12px;line-height:1.45}
-.stats-breakdown-card .stats-breakdown-net{font-weight:650}
+.stats-breakdown-card .stats-breakdown-net{display:flex;align-items:center;flex-wrap:wrap;gap:5px;font-weight:650}.stats-breakdown-net-value{display:inline-block;padding:2px 7px;border-radius:5px;color:#fff;font-weight:750;line-height:1.4}.stats-breakdown-net-value.is-profit{background:#d8473f}.stats-breakdown-net-value.is-loss{background:#171717}.stats-breakdown-net-value.is-even,.stats-breakdown-net-value.is-pending{background:#75837c}
 @media(max-width:520px){.stats-breakdown-grid{grid-template-columns:1fr}}
 </style><style id="ocr-styles">
 .ocr-panel{margin:18px 0;padding:16px;border:1px solid #d9e4dc;border-radius:12px;background:#f8faf8}.ocr-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.ocr-controls input[type=file]{flex:1;min-width:220px;background:#fff}.ocr-status{margin:10px 0}.ocr-preview{display:block;max-width:100%;max-height:300px;object-fit:contain;margin:12px auto;border:1px solid #dfe7e1;border-radius:8px}.ocr-table{min-width:980px}.ocr-table input[type=text]{min-width:92px}.ocr-table input[type=number]{min-width:78px}.ocr-table select{min-width:128px}.ocr-invalid{background:#fff3f1}.ocr-review[hidden],.ocr-preview[hidden]{display:none}.ocr-footnote{margin:8px 0 0}.ocr-actions{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
@@ -251,8 +251,12 @@ req("/api/site-status").then(s=>{$("connection").textContent=s.configured?"独�
     const title=document.createElement("strong");title.textContent=label;card.append(title);
     const volume=document.createElement("p");volume.textContent="投注项 "+count+" · 投入 "+money(summary.stake);card.append(volume);
     const result=document.createElement("p");result.className="stats-breakdown-net";
-    const netText=settledCount?"盈亏 "+(net>0?"+":net<0?"−":"")+money(Math.abs(net)):"盈亏 —";
-    result.textContent="已返 "+money(summary.payout)+" · "+netText+(pending?" · 待结 "+pending:"");
+    const returned=document.createElement("span");returned.textContent="已返 "+money(summary.payout);
+    const netBadge=document.createElement("span");
+    netBadge.className="stats-breakdown-net-value "+(settledCount?(net>0?"is-profit":net<0?"is-loss":"is-even"):"is-pending");
+    netBadge.textContent=settledCount?"盈亏 "+(net>0?"+":net<0?"−":"")+money(Math.abs(net)):"盈亏 —";
+    result.append(returned,document.createTextNode(" · "),netBadge);
+    if(pending){const waiting=document.createElement("span");waiting.textContent=" · 待结 "+pending;result.append(waiting)}
     card.append(result);grid.append(card);
   }
   host.append(grid);
