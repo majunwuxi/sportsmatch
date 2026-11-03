@@ -1157,20 +1157,19 @@ def tasks(_:str=Depends(auth), include_history:bool=False):
     now=datetime.now(timezone.utc)
     with conn() as c:
         rows=[dict(x) for x in c.execute("SELECT * FROM tasks ORDER BY created_at DESC")]
-    upcoming=[]
     visible=[]
     for x in rows:
         if x["status"]=="finished" and not include_history:
             ended=x.get("finished_at") or x.get("last_check") or x.get("created_at")
             if _utc_datetime(ended)+timedelta(hours=24)<=now:
                 continue
-        start=_utc_datetime(x.get("start_at"))
-        if x["status"] in {"pending","paused"} and start>now:
-            upcoming.append(x)
-        else:
-            visible.append(x)
-    upcoming.sort(key=lambda x:(_utc_datetime(x.get("start_at")),x["id"]))
-    rows=upcoming+visible
+        visible.append(x)
+    rows=visible
+    rows.sort(key=lambda x:(
+        x.get("status")=="finished",
+        _utc_datetime(x.get("kickoff")),
+        int(x.get("id") or 0),
+    ))
     for x in rows:
         x["tickets"]=json.loads(x.pop("ticket_json"))
         listed_scores_raw=x.pop("listed_scores_json",None)
