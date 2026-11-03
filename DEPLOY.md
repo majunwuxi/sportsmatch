@@ -67,7 +67,7 @@ ssh -L 8765:127.0.0.1:8765 root@YOUR_SERVER
 ## 数据与限制
 
 - SQLite 默认路径 `/opt/sportsmatch/data/matches.sqlite3`。
-- NBA / WNBA 搜索与比分监测使用 `BALLDONTLIE_API_KEY`；密钥只配置在后端 `/opt/sportsmatch/.env`。篮球首次监测默认设为开赛后 2 小时 30 分。篮球单场和 2–8 场过关票均支持胜负、让分胜负、大小分、胜分差结算；同一张票不能混合足球和篮球比赛。过关票会复用既有篮球监测任务，缺少任务时自动创建。
+- NBA / WNBA 搜索与比分监测使用 `BALLDONTLIE_API_KEY`；密钥只配置在后端 `/opt/sportsmatch/.env`。篮球新建单场首次监测默认设为开赛后 2 小时 39 分，每 5 分钟检查一次。篮球单场和 2–8 场过关票均支持胜负、让分胜负、大小分、胜分差结算；同一张票不能混合足球和篮球比赛。过关票会复用既有篮球监测任务，缺少任务时自动创建。
 - `BALLDONTLIE_MIN_INTERVAL_SECONDS` 默认是 `12.5` 秒，按官方免费档每分钟最多 5 次请求设置。多个监测任务会共用此限速，实际更新间隔可能长于单个任务设置的频率。
 - 创建任务时将查询一次比赛进行校验；搜索同样消耗 API 配额。
 - 查询频率不保证API实时刷新频率，比分是第三方数据，无法保障彩票奖金结算。
@@ -99,8 +99,34 @@ curl --fail-with-body -sS --user matchmonitor https://sportsmatch.sendmymail.top
 curl --fail-with-body -sS --user matchmonitor https://sportsmatch.sendmymail.top/api/health
 ```
 
-curl 会提示输入服务密码；不要把密码贴到聊天中。启用篮球监测时，在 .env 中配置真实 BALLDONTLIE_API_KEY（保留 BALLDONTLIE_MIN_INTERVAL_SECONDS=12.5），并确认该账号分别有 NBA 和 WNBA API 权限，然后重启本服务。不要把密钥发到浏览器或提交到 Git。/api/health 返回 basketball_monitoring: true 后，页面启用 NBA / WNBA 搜索。数据库迁移新增 tasks 的 sport、provider_game_id、league_code 字段，以及 parlay_legs 的 sport、league_code、line 字段；旧过关腿默认保留为足球，不会删除任务或投注数据。NBA 使用 BallDontLie `/nba/v1/` 接口，WNBA 使用 `/wnba/v1/` 接口。NBA / WNBA 赛程按北京时间筛选；后台读取各自的终场比分，按票面 SP、让分与总分结算胜负、让分胜负和大小分，胜分差按主客队分差区间结算。让分和大小分按票面半分值录入。篮球过关票支持 2–8 场竞彩系统过关组合与四种篮球玩法，复用对应监测任务；没有任务时按开赛后 150 分钟首次监测。同一张票不能混合足球和篮球。取消或中止的比赛标记为待人工确认，不自动结算。球队中文名和官方 CDN 队徽由 basketball-teams.js 维护。任何情况下都不要停止、重启、覆盖或修改 napoli-monitor.service。
+curl 会提示输入服务密码；不要把密码贴到聊天中。启用篮球监测时，在 .env 中配置真实 BALLDONTLIE_API_KEY（保留 BALLDONTLIE_MIN_INTERVAL_SECONDS=12.5），并确认该账号分别有 NBA 和 WNBA API 权限，然后重启本服务。不要把密钥发到浏览器或提交到 Git。/api/health 返回 basketball_monitoring: true 后，页面启用 NBA / WNBA 搜索。数据库迁移新增 tasks 的 sport、provider_game_id、league_code 字段，以及 parlay_legs 的 sport、league_code、line 字段；旧过关腿默认保留为足球，不会删除任务或投注数据。NBA 使用 BallDontLie `/nba/v1/` 接口，WNBA 使用 `/wnba/v1/` 接口。NBA / WNBA 赛程按北京时间筛选；后台读取各自的终场比分，按票面 SP、让分与总分结算胜负、让分胜负和大小分，胜分差按主客队分差区间结算。让分和大小分按票面半分值录入。篮球过关票支持 2–8 场竞彩系统过关组合与四种篮球玩法，复用对应监测任务；没有任务时默认按开赛后 159 分钟首次监测，每 5 分钟检查一次。同一张票不能混合足球和篮球。取消或中止的比赛标记为待人工确认，不自动结算。球队中文名和官方 CDN 队徽由 basketball-teams.js 维护。任何情况下都不要停止、重启、覆盖或修改 napoli-monitor.service。
 
 竞彩足球截图和竞彩篮球纸票照片仅在浏览器本地处理，不会提交给 Sites Worker、FastAPI 或 API-Football。主 OCR 使用 PaddleOCR.js 0.4.2 与 PP-OCRv5，首次使用需从固定 CDN 下载 SDK、模型和 WASM；Tesseract.js 是备用引擎。篮球纸票解析会尝试识别胜负、让分胜负、大小分和胜分差；目前用胜分差纸票样例校验过字段解析。用户必须逐项核对期号、球队、玩法、选项、SP、金额，以及用于“其他”判定的完整精确比分 SP 清单。服务端自动迁移新增 SQLite 字段；完成拉取后只重启 `sportsmatch-web.service`。不要改动 `napoli-monitor.service`。
 
 The backend was configured and the user confirmed the previous release is active with the poller enabled. Pull this release and restart only `sportsmatch-web.service` to serve the OCR assets and apply the task retention/order behavior. See TEST_REPORT.md for verification and remaining live checks.
+## 从 SQLite 迁移到 PostgreSQL / Timescale
+
+后端可通过 DATABASE_URL 使用 PostgreSQL；未设置时仍使用 DATABASE_PATH 指向 SQLite。请保留 DATABASE_PATH，它用于迁移源和必要时回退。
+
+1. 在 /opt/sportsmatch/.env 设置 PostgreSQL URI，例如 DATABASE_URL=postgresql://USER:URL_ENCODED_PASSWORD@HOST:PORT/DATABASE?sslmode=require。密码只放在该服务器的 .env 中；不要提交到 Git。若密码含 URI 保留字符，先做百分号编码。
+2. 停止 sportsmatch-web.service，避免迁移期间 SQLite 数据继续变化。不要停止或修改 napoli-monitor.service。
+3. 拉取代码并安装依赖，然后先运行只检查、不导入数据的预检：
+```bash
+cd /opt/sportsmatch
+sudo systemctl stop sportsmatch-web.service
+sudo /opt/sportsmatch/.venv/bin/pip install -r requirements.txt
+sudo /opt/sportsmatch/.venv/bin/python scripts/migrate_sqlite_to_postgres.py
+```
+4. 确认预检显示 PostgreSQL 目标为空、源与目标字段一致后，执行导入：
+```bash
+sudo /opt/sportsmatch/.venv/bin/python scripts/migrate_sqlite_to_postgres.py --apply
+```
+   脚本会先生成带时间戳的 SQLite 备份，按原 ID 导入六张表、重置自增序列，并核对各表记录数。若目标库已有记录或字段不匹配，脚本会停止，不会覆盖目标数据。
+5. 导入成功后再启动后端：
+```bash
+sudo systemctl start sportsmatch-web.service
+sudo systemctl status sportsmatch-web.service --no-pager
+```
+
+ChatGPT Sites 前端继续经由现有 VPS API 访问数据，无需单独迁移 Sites 数据库。若要回退到 SQLite，先停止服务并移除 DATABASE_URL，再启动服务；如果 PostgreSQL 切换后已经新增或修改记录，回退前需先处理这些新写入，避免丢失。
+

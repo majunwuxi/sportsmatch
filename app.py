@@ -2,7 +2,7 @@ import os, json, time, sqlite3, threading, urllib.request, urllib.parse, urllib.
 from itertools import combinations, product
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from functools import lru_cache
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, Query
@@ -17,8 +17,26 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 TZ=ZoneInfo("Asia/Shanghai")
+DATABASE_URL=os.getenv("DATABASE_URL","").strip()
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL="postgresql://"+DATABASE_URL[len("postgres://"):]
+USE_POSTGRES=DATABASE_URL.startswith("postgresql://")
+if DATABASE_URL and not USE_POSTGRES:
+    raise RuntimeError("DATABASE_URL must use postgres:// or postgresql://")
 DB=Path(os.getenv("DATABASE_PATH","./data/matches.sqlite3"))
-DB.parent.mkdir(parents=True, exist_ok=True)
+if not USE_POSTGRES:
+    DB.parent.mkdir(parents=True, exist_ok=True)
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:
+    psycopg=None
+    dict_row=None
+if USE_POSTGRES and psycopg is None:
+    raise RuntimeError("DATABASE_URL is set but psycopg is not installed")
+DB_INTEGRITY_ERRORS=(sqlite3.IntegrityError,)
+if psycopg is not None:
+    DB_INTEGRITY_ERRORS+=(psycopg.IntegrityError,)
 BASIC=HTTPBasic()
 STOP=threading.Event()
 LOCK=threading.Lock()
@@ -77,13 +95,143 @@ PASS_COMBO_SIZES={
     8:{1:(8,),8:(7,),9:(7,8),28:(6,),56:(5,),70:(4,),247:(2,3,4,5,6,7,8),255:(1,2,3,4,5,6,7,8)},
 }
 
+def _qmark_to_psycopg(sql):
+    # Existing query strings use SQLite-style qmark parameters.
+    output=[]
+    quote=None
+    index=0
+    while index<len(sql):
+        char=sql[index]
+        if quote:
+            output.append(char)
+            if char==quote:
+                if index+1<len(sql) and sql[index+1]==quote:
+                    output.append(sql[index+1])
+                    index+=2
+                    continue
+                quote=None
+            index+=1
+            continue
+        if char in {"'",'"'}:
+            quote=char
+            output.append(char)
+        elif char=="?":
+            output.append("%s")
+        else:
+            output.append(char)
+        index+=1
+    return "".join(output)
+
+class PostgresConnectionAdapter:
+    def __init__(self,connection):
+        self.connection=connection
+    def execute(self,sql,parameters=()):
+        return self.connection.execute(_qmark_to_psycopg(sql),parameters or ())
+    def executemany(self,sql,parameter_rows):
+        cursor=self.connection.cursor()
+        cursor.executemany(_qmark_to_psycopg(sql),parameter_rows)
+        return cursor
+
+@contextmanager
 def conn():
-    c=sqlite3.connect(DB, timeout=15)
-    c.row_factory=sqlite3.Row
-    c.execute("PRAGMA foreign_keys=ON")
-    return c
+    if USE_POSTGRES:
+        raw=psycopg.connect(DATABASE_URL,connect_timeout=10,row_factory=dict_row)
+        c=PostgresConnectionAdapter(raw)
+    else:
+        raw=sqlite3.connect(DB,timeout=15)
+        raw.row_factory=sqlite3.Row
+        raw.execute("PRAGMA foreign_keys=ON")
+        c=raw
+    try:
+        yield c
+        raw.commit()
+    except BaseException:
+        raw.rollback()
+        raise
+    finally:
+        raw.close()
+
+def insert_id(c,sql,parameters):
+    if USE_POSTGRES:
+        query=sql.rstrip().rstrip(";")+" RETURNING id"
+        row=c.execute(query,parameters).fetchone()
+        if row is None:raise RuntimeError("Database insert did not return an id")
+        return int(row["id"])
+    return c.execute(sql,parameters).lastrowid
 
 def init_db():
+    if USE_POSTGRES:
+        statements=(
+            """CREATE TABLE IF NOT EXISTS tasks (
+              id BIGSERIAL PRIMARY KEY,
+              fixture_id BIGINT NOT NULL UNIQUE,
+              home TEXT NOT NULL, away TEXT NOT NULL,
+              league_name TEXT, kickoff TEXT, start_at TEXT NOT NULL,
+              interval_minutes INTEGER NOT NULL,
+              enabled INTEGER NOT NULL DEFAULT 1,
+              status TEXT NOT NULL DEFAULT 'pending',
+              last_score TEXT, last_check TEXT, finished_at TEXT, next_check TEXT NOT NULL,
+              ticket_json TEXT NOT NULL DEFAULT '[]',
+              error TEXT, created_at TEXT NOT NULL,
+              created_for_parlay INTEGER NOT NULL DEFAULT 0,
+              listed_scores_json TEXT,
+              listed_scores_verified INTEGER NOT NULL DEFAULT 0,
+              settlement_score TEXT, half_score TEXT, provider_status TEXT,
+              sport TEXT NOT NULL DEFAULT 'football',
+              provider_game_id TEXT, league_code TEXT
+            )""",
+            """CREATE TABLE IF NOT EXISTS "usage" (
+              utc_day TEXT PRIMARY KEY, requests INTEGER NOT NULL DEFAULT 0
+            )""",
+            """CREATE TABLE IF NOT EXISTS sporttery_match_numbers (
+              match_key TEXT PRIMARY KEY,
+              number TEXT NOT NULL,
+              updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text)
+            )""",
+            """CREATE TABLE IF NOT EXISTS basketball_fixture_cache (
+              league_code TEXT NOT NULL,
+              provider_game_id TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              fetched_at DOUBLE PRECISION NOT NULL,
+              PRIMARY KEY(league_code,provider_game_id)
+            )""",
+            """CREATE TABLE IF NOT EXISTS parlay_tickets (
+              id BIGSERIAL PRIMARY KEY,
+              pass_type TEXT NOT NULL,
+              multiples INTEGER NOT NULL,
+              unit_stake DOUBLE PRECISION NOT NULL DEFAULT 2,
+              total_stake DOUBLE PRECISION NOT NULL,
+              declared_payout DOUBLE PRECISION,
+              status TEXT NOT NULL DEFAULT 'pending',
+              last_notified_state TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS parlay_legs (
+              id BIGSERIAL PRIMARY KEY,
+              parlay_id BIGINT NOT NULL REFERENCES parlay_tickets(id) ON DELETE CASCADE,
+              leg_index INTEGER NOT NULL,
+              fixture_id BIGINT NOT NULL,
+              sport TEXT NOT NULL DEFAULT 'football',
+              league_code TEXT,
+              home TEXT NOT NULL,
+              away TEXT NOT NULL,
+              league_name TEXT,
+              kickoff TEXT,
+              market TEXT NOT NULL,
+              selection TEXT NOT NULL,
+              handicap INTEGER,
+              line DOUBLE PRECISION,
+              odds TEXT NOT NULL,
+              selections_json TEXT NOT NULL DEFAULT '[]',
+              void_confirmed INTEGER NOT NULL DEFAULT 0,
+              UNIQUE(parlay_id,leg_index)
+            )""",
+        )
+        with conn() as c:
+            for statement in statements:
+                c.execute(statement)
+        return
     with conn() as c:
         c.executescript("""
         PRAGMA journal_mode=WAL;
@@ -100,7 +248,7 @@ def init_db():
           error TEXT, created_at TEXT NOT NULL,
           created_for_parlay INTEGER NOT NULL DEFAULT 0
         );
-        CREATE TABLE IF NOT EXISTS usage (
+        CREATE TABLE IF NOT EXISTS "usage" (
           utc_day TEXT PRIMARY KEY, requests INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS sporttery_match_numbers (
@@ -203,11 +351,11 @@ def api(endpoint,params):
     limit=max(1,int(os.getenv("API_DAILY_LIMIT","90")))
     with LOCK:
         with conn() as c:
-            c.execute("BEGIN IMMEDIATE")
-            row=c.execute("SELECT requests FROM usage WHERE utc_day=?",(day,)).fetchone()
+            if not USE_POSTGRES:c.execute("BEGIN IMMEDIATE")
+            row=c.execute("SELECT requests FROM "usage" WHERE utc_day=?",(day,)).fetchone()
             used=row["requests"] if row else 0
             if used>=limit: raise RuntimeError("Daily API budget exhausted")
-            c.execute("INSERT INTO usage(utc_day,requests) VALUES (?,1) ON CONFLICT(utc_day) DO UPDATE SET requests=requests+1",(day,))
+            c.execute("INSERT INTO "usage"(utc_day,requests) VALUES (?,1) ON CONFLICT(utc_day) DO UPDATE SET requests=requests+1",(day,))
     q=urllib.parse.urlencode(params)
     result=request_json("https://v3.football.api-sports.io/"+endpoint+"?"+q, {"x-apisports-key":key})
     if result.get("errors"):raise RuntimeError(str(result["errors"]))
@@ -896,7 +1044,7 @@ def load_parlay(parlay_id):
 
 def pending_parlay_fixture_ids():
     with conn() as c:
-        return {int(row[0]) for row in c.execute("""SELECT DISTINCT l.fixture_id FROM parlay_legs l
+        return {int(row["fixture_id"]) for row in c.execute("""SELECT DISTINCT l.fixture_id FROM parlay_legs l
             JOIN parlay_tickets p ON p.id=l.parlay_id
             LEFT JOIN tasks t ON t.fixture_id=l.fixture_id
             WHERE p.status!='stopped' AND (t.id IS NULL OR t.status NOT IN ('finished','review_required'))""")}
@@ -925,7 +1073,7 @@ def sync_parlay(parlay_id,send_notice=True):
 
 def sync_parlays_for_fixture(fixture_id):
     with conn() as c:
-        ids=[row[0] for row in c.execute("SELECT DISTINCT p.id FROM parlay_tickets p JOIN parlay_legs l ON l.parlay_id=p.id WHERE l.fixture_id=? AND p.status!='stopped'",(fixture_id,))]
+        ids=[row["id"] for row in c.execute("SELECT DISTINCT p.id FROM parlay_tickets p JOIN parlay_legs l ON l.parlay_id=p.id WHERE l.fixture_id=? AND p.status!='stopped'",(fixture_id,))]
     for parlay_id in ids:sync_parlay(parlay_id)
 
 @app.get("/api/health")
@@ -952,9 +1100,9 @@ def put_sporttery_match_number(data:SportteryMatchNoIn,_:str=Depends(auth)):
             c.execute("DELETE FROM sporttery_match_numbers WHERE match_key=?",(key,))
             return {"number":""}
         if data.only_if_missing:
-            c.execute("INSERT OR IGNORE INTO sporttery_match_numbers(match_key,number,updated_at) VALUES(?,?,CURRENT_TIMESTAMP)",(key,number))
+            c.execute("INSERT INTO sporttery_match_numbers(match_key,number,updated_at) VALUES(?,?,CAST(CURRENT_TIMESTAMP AS TEXT)) ON CONFLICT(match_key) DO NOTHING",(key,number))
         else:
-            c.execute("INSERT INTO sporttery_match_numbers(match_key,number,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT(match_key) DO UPDATE SET number=excluded.number,updated_at=CURRENT_TIMESTAMP",(key,number))
+            c.execute("INSERT INTO sporttery_match_numbers(match_key,number,updated_at) VALUES(?,?,CAST(CURRENT_TIMESTAMP AS TEXT)) ON CONFLICT(match_key) DO UPDATE SET number=excluded.number,updated_at=CAST(CURRENT_TIMESTAMP AS TEXT)",(key,number))
         saved=c.execute("SELECT number FROM sporttery_match_numbers WHERE match_key=?",(key,)).fetchone()
     return {"number":str(saved["number"]) if saved else ""}
 
@@ -1073,7 +1221,7 @@ def statistics(_:str=Depends(auth)):
             line=f"（让球/让分 {pick['handicap']}）" if pick.get("handicap") is not None else f"（总分 {pick['line']}）" if pick.get("line") is not None else ""
             home,away=task["home"],task["away"]
             details.setdefault(key,[]).append({"type":"single","id":task["id"],"kickoff":task.get("kickoff"),"match":home+" vs "+away,"matches":[{"home":home,"away":away,"home_cn":task.get("home_cn") or BASKETBALL_TEAM_NAMES_ZH.get(home,""),"away_cn":task.get("away_cn") or BASKETBALL_TEAM_NAMES_ZH.get(away,"")}],"market":pick["market_label"],"selection":f"{pick['selection']}{line} · SP {pick['odds']}","stake":pick["stake"],"payout":pick["payout"] if settled else None,"net":pick["payout"]-pick["stake"] if settled else None})
-    with conn() as c:ids=[row[0] for row in c.execute("SELECT id FROM parlay_tickets")]
+    with conn() as c:ids=[row["id"] for row in c.execute("SELECT id FROM parlay_tickets")]
     for parlay_id in ids:
         loaded=load_parlay(parlay_id)
         if not loaded:continue
@@ -1090,7 +1238,7 @@ def statistics(_:str=Depends(auth)):
 
 @app.get("/api/parlays")
 def get_parlays(_:str=Depends(auth)):
-    with conn() as c: ids=[row[0] for row in c.execute("SELECT id FROM parlay_tickets ORDER BY created_at DESC")]
+    with conn() as c: ids=[row["id"] for row in c.execute("SELECT id FROM parlay_tickets ORDER BY created_at DESC")]
     result=[]
     for parlay_id in ids:
         item=sync_parlay(parlay_id,send_notice=False)
@@ -1169,7 +1317,7 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
     resumed=[]
     with TASK_LOCK:
         with conn() as c:
-            c.execute("BEGIN IMMEDIATE")
+            if not USE_POSTGRES:c.execute("BEGIN IMMEDIATE")
             # Recheck after provider calls to avoid creating a second watcher if
             # another request added this fixture while validation was in flight.
             current={int(row["fixture_id"]):dict(row) for row in c.execute(
@@ -1189,17 +1337,16 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
                         start=_utc_datetime(kickoff)+timedelta(minutes=159 if leg.sport=="basketball" else 120)
                     monitor_interval=leg.interval_minutes if leg.interval_minutes is not None else (5 if leg.sport=="basketball" else 10)
                     next_at=max(start.astimezone(timezone.utc),now).isoformat()
-                    cur=c.execute("""INSERT INTO tasks(fixture_id,provider_game_id,league_code,sport,home,away,league_name,kickoff,start_at,interval_minutes,next_check,ticket_json,created_at,created_for_parlay)
+                    inserted_task_id=insert_id(c,"""INSERT INTO tasks(fixture_id,provider_game_id,league_code,sport,home,away,league_name,kickoff,start_at,interval_minutes,next_check,ticket_json,created_at,created_for_parlay)
                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)""",(internal_id,fixture["provider_game_id"],fixture["league_code"],fixture["sport"],fixture["home"],fixture["away"],fixture["league_name"],kickoff,start.isoformat(),monitor_interval,next_at,"[]",created_at))
-                    current[internal_id]={"id":cur.lastrowid,"fixture_id":internal_id,"home":fixture["home"],"away":fixture["away"],"league_name":fixture["league_name"],"kickoff":kickoff,"status":"pending","enabled":1}
+                    current[internal_id]={"id":inserted_task_id,"fixture_id":internal_id,"home":fixture["home"],"away":fixture["away"],"league_name":fixture["league_name"],"kickoff":kickoff,"status":"pending","enabled":1}
                 else:
                     row=current[internal_id]
                     if row.get("status") in {"paused","stopped"}:
                         c.execute("UPDATE tasks SET status='pending',enabled=1,next_check=? WHERE id=?",(now.isoformat(),row["id"]))
                         row["status"]="pending";row["enabled"]=1;resumed.append(leg.fixture_id)
-            cur=c.execute("""INSERT INTO parlay_tickets(pass_type,multiples,unit_stake,total_stake,declared_payout,status,created_at,updated_at)
+            parlay_id=insert_id(c,"""INSERT INTO parlay_tickets(pass_type,multiples,unit_stake,total_stake,declared_payout,status,created_at,updated_at)
                 VALUES (?,?,?,?,?,'pending',?,?)""",(canonical,int(data.multiples),2.0,float(total),data.declared_payout,created_at,created_at))
-            parlay_id=cur.lastrowid
             for index,leg in enumerate(data.legs):
                 row=current[internal_ids[id(leg)]]
                 validated=canonical_choices[id(leg)];first=validated[0]
@@ -1250,7 +1397,7 @@ def stop_parlay(parlay_id:int,_:str=Depends(auth)):
         with conn() as c:
             row=c.execute("SELECT id FROM parlay_tickets WHERE id=?",(parlay_id,)).fetchone()
             if not row:raise HTTPException(404,"Parlay ticket not found")
-            fixtures=[int(item[0]) for item in c.execute("SELECT fixture_id FROM parlay_legs WHERE parlay_id=?",(parlay_id,))]
+            fixtures=[int(item["fixture_id"]) for item in c.execute("SELECT fixture_id FROM parlay_legs WHERE parlay_id=?",(parlay_id,))]
             c.execute("UPDATE parlay_tickets SET status='stopped',updated_at=? WHERE id=?",(datetime.now(timezone.utc).isoformat(),parlay_id))
         stop_unused_parlay_watchers(fixtures)
     return {"ok":True,"status":"stopped"}
@@ -1259,7 +1406,7 @@ def stop_parlay(parlay_id:int,_:str=Depends(auth)):
 def delete_parlay(parlay_id:int,_:str=Depends(auth)):
     with TASK_LOCK:
         with conn() as c:
-            fixtures=[int(item[0]) for item in c.execute("SELECT fixture_id FROM parlay_legs WHERE parlay_id=?",(parlay_id,))]
+            fixtures=[int(item["fixture_id"]) for item in c.execute("SELECT fixture_id FROM parlay_legs WHERE parlay_id=?",(parlay_id,))]
             cur=c.execute("DELETE FROM parlay_tickets WHERE id=?",(parlay_id,))
             if cur.rowcount==0:raise HTTPException(404,"Parlay ticket not found")
         stop_unused_parlay_watchers(fixtures)
@@ -1336,10 +1483,10 @@ def create_task(data:TaskIn,_:str=Depends(auth)):
     next_at=max(start.astimezone(timezone.utc).isoformat(),now)
     with conn() as c:
         try:
-            cur=c.execute("""INSERT INTO tasks(fixture_id,provider_game_id,league_code,sport,home,away,league_name,kickoff,start_at,interval_minutes,next_check,ticket_json,listed_scores_json,listed_scores_verified,created_at)
+            inserted_task_id=insert_id(c,"""INSERT INTO tasks(fixture_id,provider_game_id,league_code,sport,home,away,league_name,kickoff,start_at,interval_minutes,next_check,ticket_json,listed_scores_json,listed_scores_verified,created_at)
              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(internal_fixture_id,provider_game_id,league_code,sport,home,away,league_name,kickoff_value,start.isoformat(),monitor_interval,next_at,json.dumps(tickets,ensure_ascii=False),json.dumps(listed_scores,ensure_ascii=False) if listed_scores is not None else None,int(data.listed_scores_verified),now))
-        except sqlite3.IntegrityError:raise HTTPException(409,"Fixture already monitored")
-    return {"id":cur.lastrowid,"home":home,"away":away,"sport":sport,"league_code":league_code}
+        except DB_INTEGRITY_ERRORS:raise HTTPException(409,"Fixture already monitored")
+    return {"id":inserted_task_id,"home":home,"away":away,"sport":sport,"league_code":league_code}
 
 @app.put("/api/tasks/{task_id}/tickets")
 def update_tickets(task_id:int,data:list[Ticket]|TicketUpdateIn,_:str=Depends(auth)):
@@ -1416,7 +1563,7 @@ def task_action(task_id:int,action:str,_:str=Depends(auth)):
             row=c.execute("SELECT status,start_at FROM tasks WHERE id=?",(task_id,)).fetchone()
             if not row:raise HTTPException(404,"Task not found")
             if row["status"] in {"finished","review_required"}:raise HTTPException(409,"Finished match cannot be resumed")
-            fixture=c.execute("SELECT fixture_id FROM tasks WHERE id=?",(task_id,)).fetchone()[0]
+            fixture=c.execute("SELECT fixture_id FROM tasks WHERE id=?",(task_id,)).fetchone()["fixture_id"]
             if action in {"pause","stop"} and has_open_parlay_for_fixture(int(fixture)):
                 raise HTTPException(409,"此比赛仍被未结算的过关票引用；请先停止或删除过关票")
             next_at=max(datetime.now(timezone.utc),datetime.fromisoformat(row["start_at"]).astimezone(timezone.utc)).isoformat()
@@ -1429,7 +1576,7 @@ def task_action(task_id:int,action:str,_:str=Depends(auth)):
 def usage(_:str=Depends(auth)):
     today=datetime.now(timezone.utc).strftime("%Y-%m-%d")
     with conn() as c:
-        row=c.execute("SELECT requests FROM usage WHERE utc_day=?",(today,)).fetchone()
+        row=c.execute("SELECT requests FROM "usage" WHERE utc_day=?",(today,)).fetchone()
     return {"day_utc":today,"used":row["requests"] if row else 0,"budget":int(os.getenv("API_DAILY_LIMIT","90"))}
 
 @app.get("/",response_class=HTMLResponse)

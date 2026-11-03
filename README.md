@@ -25,7 +25,7 @@ The dashboard is published as an owner-private ChatGPT Site. Its always-on sched
 - Simulate manually by market, or upload a soccer betting-page screenshot or Chinese Sports Lottery basketball receipt for browser-local OCR; review every selection and SP, then balance a shared ¥2-unit budget
 - Build a per-screenshot list of every recognized exact-score option with SP, separate from the user's selected bets; `胜其它`/`负其它` settle only when the final score is not in that confirmed list
 - Show live scores separately from the 90-minute settlement score so extra time and penalties do not change JCZQ results
-- Check scores on a persistent SQLite-backed schedule; Telegram alerts at first check, score changes, and full time
+- Check scores on a persistent SQLite- or PostgreSQL-backed schedule; Telegram alerts at first check, score changes, and full time
 - HTTP Basic authentication; API keys only from server environment variables
 - Keep BallDontLie requests at least 12.5 seconds apart to stay within its documented Free-plan rate limit
 - API daily call budget guard and graceful error recording
