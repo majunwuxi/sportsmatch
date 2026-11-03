@@ -135,7 +135,7 @@ class PostgresConnectionAdapter:
 @contextmanager
 def conn():
     if USE_POSTGRES:
-        raw=psycopg.connect(DATABASE_URL,connect_timeout=10,row_factory=dict_row)
+        raw=psycopg.connect(DATABASE_URL,connect_timeout=10,prepare_threshold=None,row_factory=dict_row)
         c=PostgresConnectionAdapter(raw)
     else:
         raw=sqlite3.connect(DB,timeout=15)
