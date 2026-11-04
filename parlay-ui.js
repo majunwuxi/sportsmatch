@@ -168,18 +168,20 @@
     updateTotals();
   }
 
-  function addFixture(item) {
+  async function addFixture(item) {
     const targetIndex=bindingIndex!==null?bindingIndex:legs.findIndex(leg=>!leg.fixture_id&&leg.home&&leg.away);
     const identity=fixtureKey(item),sport=item.sport||"football";
     if(legs.some((leg,index)=>leg.fixture_id&&fixtureKey(leg)===identity&&index!==targetIndex)){ $("parlayError").textContent="同一场比赛不能重复添加为多个比赛腿。";return; }
     if(legs.some((leg,index)=>leg.fixture_id&&index!==targetIndex&&(leg.sport||"football")!==sport)){ $("parlayError").textContent="竞彩过关票不能混合足球和篮球比赛，请先删除其他运动项目的比赛腿。";return; }
     const fixture={fixture_id:Number(item.provider_id??item.id),sport,league_code:sport==="basketball"?(item.league_code||"nba"):null,
       home:item.home,away:item.away,league_name:item.league_name||null,kickoff:item.kickoff||null};
+    try{await warnExistingBetsBeforeBinding(item,targetIndex)}
+    catch(error){if(!window.confirm("绑定前读取现有投注记录失败，重复投注检查未完成。\n"+(error.message||"")+"\n仍要继续绑定这场比赛吗？"))return}
     if(targetIndex>=0&&legs[targetIndex]){
       const leg=legs[targetIndex],oldSport=leg.sport||"football";Object.assign(leg,fixture);
       if(oldSport!==sport){const market=defaultMarket(sport);leg.selections=[{market,selection:optionsFor(market)[0]||"胜",odds:"",handicap:null,line:null}];syncLegacySelection(leg)}
     }else {const market=defaultMarket(sport);legs.push({...fixture,selections:[{market,selection:optionsFor(market)[0]||"胜",odds:"",handicap:null,line:null}]})}
-    closeFixtureSearch();$("parlayError").textContent="";$("parlayImportStatus").textContent=`已绑定：${item.home} vs ${item.away}。请核对玩法、投注项和SP。`;renderLegs();
+    closeFixtureSearch();$("parlayError").textContent="";$("parlayImportStatus").textContent="已绑定："+item.home+" vs "+item.away+"。请核对玩法、投注项和SP。";renderLegs();
   }
 
   function importText() {
@@ -252,6 +254,47 @@
   }
   function riskPickLabel(pick) {
     return (MARKETS[pick.market]||pick.market)+" "+pickSelectionLabel(pick)+ticketPickLine(pick);
+  }
+  function riskPickDetails(pick) {
+    const odds=Number(pick.odds);
+    return riskPickLabel(pick)+(Number.isFinite(odds)&&odds>0?" · SP "+odds.toFixed(3):"");
+  }
+  function isResolvedPick(pick) { return ["won","lost","void"].includes(String(pick.state||"").toLowerCase()); }
+  async function warnExistingBetsBeforeBinding(fixture,targetIndex) {
+    const [parlays,tasks]=await Promise.all([core.req("/api/parlays"),core.req("/api/tasks")]);
+    const defaultMarketValue=defaultMarket(fixture.sport||"football");
+    const draft=targetIndex>=0&&legs[targetIndex]?legs[targetIndex]:{...fixture,selections:[{market:defaultMarketValue,selection:optionsFor(defaultMarketValue)[0]||"胜"}]};
+    const currentPicks=legSelections(draft),isSameOutcome=(leg,pick)=>currentPicks.some(current=>riskOutcomeKey(leg,pick)===riskOutcomeKey(draft,current));
+    const singleRows=[],parlayRows=[];
+    for(const task of tasks||[]) {
+      if(task.status==="finished"||!sameRiskFixture(task,fixture))continue;
+      const items=Array.isArray(task.tickets)?task.tickets:Array.isArray(task.settlement?.tickets)?task.settlement.tickets:[];
+      const pending=items.map((pick,index)=>({pick,index})).filter(({pick})=>pick.won===null||pick.won===undefined);
+      if(!pending.length)continue;
+      const overlap=pending.some(({pick})=>isSameOutcome(task,pick));
+      const lines=pending.map(({pick,index})=>"  · 第"+(index+1)+"注 "+riskPickDetails(pick)+" · "+money(pick.stake)+(isSameOutcome(task,pick)?"【与本票同结果】":""));
+      singleRows.push("单场监测任务 #"+task.id+(overlap?" · 有同结果投注":"")+"\n"+lines.join("\n"));
+    }
+    for(const ticket of parlays||[]) {
+      if(ticket.final===true)continue;
+      const ticketLegs=ticket.legs||[],legIndex=ticketLegs.findIndex(leg=>sameRiskFixture(leg,fixture));
+      if(legIndex<0)continue;
+      const leg=ticketLegs[legIndex];
+      if(leg.void_confirmed||["won","lost","void"].includes(String(leg.state||"").toLowerCase()))continue;
+      const picks=ticketPicks(leg).filter(pick=>!isResolvedPick(pick));
+      if(!picks.length)continue;
+      const matched=picks.filter(pick=>isSameOutcome(leg,pick));
+      const exposure=stakeForOutcome(ticket.pass_type,ticketLegs,legIndex,ticket.multiples,ticket.unit_stake,picks.length);
+      const mainDetails=picks.map(pick=>"  · "+riskPickDetails(pick)+(isSameOutcome(leg,pick)?"【与本票同结果】":"")).join("\n");
+      const fullDetails=ticketLegs.map((entry,index)=>"  "+(index+1)+". "+riskMatchLabel(entry)+"："+ticketPicks(entry).map(pick=>riskPickDetails(pick)+(pick.status_cn?" · "+pick.status_cn:"")).join("；")).join("\n");
+      parlayRows.push("过关票 #"+ticket.id+" · "+ticket.pass_type+" · "+ticket.multiples+"倍 · "+ticket.combination_count+"注 · 总投入 "+money(ticket.total_stake)+" · 涉及本场的组合投入 "+money(exposure)+(matched.length?" · 有同结果投注":"")+"\n本场投注：\n"+mainDetails+"\n全票明细：\n"+fullDetails);
+    }
+    if(!singleRows.length&&!parlayRows.length)return;
+    const sections=[];
+    if(singleRows.length)sections.push("单场任务（"+singleRows.length+"）：\n"+singleRows.slice(0,12).join("\n\n"));
+    if(parlayRows.length)sections.push("过关票（"+parlayRows.length+"）：\n"+parlayRows.slice(0,12).join("\n\n"));
+    const omitted=Math.max(0,singleRows.length-12)+Math.max(0,parlayRows.length-12);
+    window.alert("这场比赛已经有 "+singleRows.length+" 个单场投注任务、"+parlayRows.length+" 张未结算过关票。绑定前请核对已有投注：\n\n"+sections.join("\n\n")+(omitted?"\n\n另有 "+omitted+" 条记录未显示。":"")+"\n\n“与本票同结果”表示玩法、投注项及让球/让分/总分线都相同。继续绑定后，创建过关票前仍会再次检查同结果重复投注。");
   }
   async function findDuplicateExposure(pass,multiples) {
     const [parlays,tasks]=await Promise.all([core.req("/api/parlays"),core.req("/api/tasks")]);
