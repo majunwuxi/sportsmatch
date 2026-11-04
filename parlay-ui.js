@@ -209,6 +209,94 @@
     $("parlayPanel").scrollIntoView({behavior:"smooth",block:"start"});
   }
 
+  function riskFixtureSignature(item) {
+    const sport=item.sport||"football",league=sport==="basketball"?(item.league_code||"nba"):"football";
+    const normalize=value=>String(value||"").normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/g," ");
+    const home=normalize(item.home),away=normalize(item.away),kickoff=Date.parse(item.kickoff||"");
+    if(home&&away&&Number.isFinite(kickoff))return JSON.stringify([sport,league,home,away,Math.floor(kickoff/60000)]);
+    const id=Number(item.provider_id??item.fixture_id??item.id);
+    return Number.isFinite(id)&&id>0?JSON.stringify([sport,league,"id",id]):"";
+  }
+  function sameRiskFixture(a,b) {
+    const sportA=a.sport||"football",sportB=b.sport||"football";
+    const leagueA=sportA==="basketball"?(a.league_code||"nba"):"football";
+    const leagueB=sportB==="basketball"?(b.league_code||"nba"):"football";
+    if(sportA!==sportB||leagueA!==leagueB)return false;
+    const normalize=value=>String(value||"").normalize("NFKC").trim().toLocaleLowerCase().replace(/\s+/g," ");
+    const homeA=normalize(a.home),homeB=normalize(b.home),awayA=normalize(a.away),awayB=normalize(b.away);
+    const kickoffA=Date.parse(a.kickoff||""),kickoffB=Date.parse(b.kickoff||"");
+    if(homeA&&homeB&&awayA&&awayB&&homeA===homeB&&awayA===awayB&&Number.isFinite(kickoffA)&&Number.isFinite(kickoffB))return Math.abs(kickoffA-kickoffB)<=5*60*1000;
+    const idA=Number(a.provider_id??a.fixture_id??a.id),idB=Number(b.provider_id??b.fixture_id??b.id);
+    return Number.isFinite(idA)&&idA>0&&idA===idB;
+  }
+  function riskOutcomeKey(leg,pick) {
+    const normalized=value=>value===null||value===undefined||value===""?"":Number.isFinite(Number(value))?String(Number(value)):String(value).trim();
+    return [String(pick.market||""),String(apiSelection(leg,pick)||"").trim().replace(/\s+/g," ").toLocaleLowerCase(),normalized(pick.handicap),normalized(pick.line)].join("|");
+  }
+  function stakeForOutcome(passType,source,legIndex,multiples,unitStake,pickCount=1) {
+    const pass=splitPass(passType),sizes=pass&&COMBO_SIZES[pass.legs]?.[pass.mode];
+    if(!pass||pass.legs!==source.length||!sizes)return 0;
+    let variants=0;
+    for(const combo of combinations(source.length,sizes)){
+      if(!combo.includes(legIndex))continue;
+      let ways=1;
+      for(const index of combo)if(index!==legIndex)ways*=ticketPicks(source[index]).length;
+      variants+=ways*pickCount;
+    }
+    return Number(unitStake||2)*Number(multiples||1)*variants;
+  }
+  function riskMatchLabel(leg) {
+    const home=core.teamNameZh?.(leg.home,leg.home_cn)||leg.home||"主队";
+    const away=core.teamNameZh?.(leg.away,leg.away_cn)||leg.away||"客队";
+    return home+" vs "+away;
+  }
+  function riskPickLabel(pick) {
+    return (MARKETS[pick.market]||pick.market)+" "+pickSelectionLabel(pick)+ticketPickLine(pick);
+  }
+  async function findDuplicateExposure(pass,multiples) {
+    const [parlays,tasks]=await Promise.all([core.req("/api/parlays"),core.req("/api/tasks")]);
+    const groups=new Map();
+    for(let legIndex=0;legIndex<legs.length;legIndex++){
+      const draft=legs[legIndex],fixtureKey=riskFixtureSignature(draft);
+      if(!fixtureKey)continue;
+      for(const pick of legSelections(draft)){
+        const outcomeKey=riskOutcomeKey(draft,pick),groupKey=JSON.stringify([fixtureKey,outcomeKey]);
+        let group=groups.get(groupKey);
+        if(!group){group={match:riskMatchLabel(draft),pick:riskPickLabel(pick),existing:new Map(),newStake:0};groups.set(groupKey,group)}
+        group.newStake+=stakeForOutcome($("parlayPassType").value,legs,legIndex,multiples,2,1);
+        for(const ticket of parlays||[]){
+          if(ticket.final===true)continue;
+          const ticketLegs=ticket.legs||[],existingIndex=ticketLegs.findIndex(item=>sameRiskFixture(item,draft));
+          if(existingIndex<0)continue;
+          const existingLeg=ticketLegs[existingIndex];
+          if(existingLeg.void_confirmed||["won","lost","void"].includes(existingLeg.state))continue;
+          const matched=ticketPicks(existingLeg).filter(item=>riskOutcomeKey(existingLeg,item)===outcomeKey);
+          if(!matched.length)continue;
+          const exposure=stakeForOutcome(ticket.pass_type,ticketLegs,existingIndex,ticket.multiples,ticket.unit_stake,matched.length);
+          if(exposure>0)group.existing.set("parlay:"+ticket.id,{label:"过关票 #"+ticket.id,stake:exposure});
+        }
+        for(const task of tasks||[]){
+          if(task.status==="finished"||!sameRiskFixture(task,draft))continue;
+          for(let ticketIndex=0;ticketIndex<(task.tickets||[]).length;ticketIndex++){
+            const item=task.tickets[ticketIndex];
+            if(item.won!==null&&item.won!==undefined)continue;
+            if(riskOutcomeKey(task,item)!==outcomeKey)continue;
+            const exposure=Number(item.stake||0);
+            if(exposure>0)group.existing.set("single:"+task.id+":"+ticketIndex,{label:"单场任务 #"+task.id+" 第"+(ticketIndex+1)+"注",stake:exposure});
+          }
+        }
+      }
+    }
+    return [...groups.values()].filter(group=>group.existing.size>0).map(group=>{
+      const existing=[...group.existing.values()];
+      return {...group,existingCount:existing.length,existingStake:existing.reduce((sum,item)=>sum+item.stake,0)};
+    });
+  }
+  function duplicateExposureMessage(groups) {
+    const lines=groups.map(group=>"- "+group.match+" · "+group.pick+"：已有 "+group.existingCount+" 张票（"+[...group.existing.values()].map(item=>item.label).join("、")+"），相关组合投入 "+money(group.existingStake)+"；本票增加 "+money(group.newStake));
+    return "检测到同场同结果重复投注：\n\n"+lines.join("\n")+"\n\n金额按包含该结果的未结算投注组合计算；赛果不利时，列出的投注会同时受影响。\n\n仍要创建这张过关票吗？";
+  }
+
   async function loadParlays() {
     const host=$("parlayTickets");
     try { if(root.MatchMonitorSportteryNo){try{await root.MatchMonitorSportteryNo.load()}catch{}} const items=await core.req("/api/parlays");host.replaceChildren();for(const item of items)renderTicket(host,item); }
@@ -389,7 +477,12 @@
       if(!comboCount)throw Error("当前选项展开后没有可用过关组合。");
       if(comboCount>5000)throw Error("该票展开后的注数超过5000注，当前无法安全创建监测。");
       if(total&&Math.abs(total-expected)>0.009)throw Error(`票面总金额为 ${money(total)}，按当前方式和倍数应为 ${money(expected)}。`);
-      submitting=true;updateTotals();$("parlayError").textContent="正在创建过关监测…";
+      submitting=true;updateTotals();$("parlayError").textContent="正在检查同场重复投注…";
+      let duplicateGroups=[];
+      try{duplicateGroups=await findDuplicateExposure(pass,multiples)}
+      catch(error){if(!window.confirm("暂时无法读取当前单场和过关记录，重复风险检查未完成。\n"+(error.message||"")+"\n仍要继续创建吗？"))return}
+      if(duplicateGroups.length&&!window.confirm(duplicateExposureMessage(duplicateGroups)))return;
+      $("parlayError").textContent="正在创建过关监测…";
       const result=await core.req("/api/parlays",{method:"POST",body:JSON.stringify({pass_type:$("parlayPassType").value,multiples,unit_stake:2,declared_total:total||expected,declared_payout:Number($("parlayDeclaredPayout").value)||null,legs:legs.map(leg=>{const picks=legSelections(leg).map(pick=>({market:pick.market,selection:apiSelection(leg,pick),odds:Number(pick.odds),...(["handicap","basketball_handicap"].includes(pick.market)?{handicap:Number(pick.handicap)}:{}),...(pick.market==="basketball_total"?{line:Number(pick.line)}:{})})),first=picks[0];return{fixture_id:leg.fixture_id,sport:leg.sport||"football",...(leg.sport==="basketball"?{league_code:leg.league_code||"nba"}:{}),...first,selections:picks}})})});
       legs=[];bindingIndex=null;$("parlayError").textContent=result.resumed_fixture_ids?.length?`过关票已创建；已恢复 ${result.resumed_fixture_ids.length} 个共用比赛监测任务。`:"过关票已创建，赛果将由对应比赛监测任务自动更新。";renderLegs();await loadParlays();
     }catch(error){$("parlayError").textContent=error.message||String(error)}finally{submitting=false;updateTotals()}
