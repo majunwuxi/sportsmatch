@@ -1092,6 +1092,11 @@ def health(_:str=Depends(auth)):
     return {"ok":True,"poller":POLL_ENABLED,"timezone":"Asia/Shanghai","screenshot_score_lists":True,
         "parlay_monitoring":True,"basketball_monitoring":bool(balldontlie_key())}
 
+@app.get("/api/site-status")
+def site_status(_:str=Depends(auth)):
+    # The standalone VPS is its own backend; this endpoint is used by the shared UI.
+    return {"configured":True,"mode":"standalone","timezone":"Asia/Shanghai"}
+
 @app.get("/api/sporttery-match-nos")
 def get_sporttery_match_numbers(_:str=Depends(auth)):
     with conn() as c:
