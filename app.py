@@ -1391,8 +1391,10 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
                 else:
                     row=current[internal_id]
                     if row.get("status") in {"paused","stopped"}:
-                        c.execute("UPDATE tasks SET status='pending',enabled=1,next_check=? WHERE id=?",(now.isoformat(),row["id"]))
-                        row["status"]="pending";row["enabled"]=1;resumed.append(leg.fixture_id)
+                        # Reusing a watcher must respect its scheduled monitoring start.
+                        next_at=max(_utc_datetime(row.get("start_at")),now).isoformat()
+                        c.execute("UPDATE tasks SET status='pending',enabled=1,next_check=? WHERE id=?",(next_at,row["id"]))
+                        row["status"]="pending";row["enabled"]=1;row["next_check"]=next_at;resumed.append(leg.fixture_id)
             parlay_id=insert_id(c,"""INSERT INTO parlay_tickets(pass_type,multiples,unit_stake,total_stake,declared_payout,status,created_at,updated_at)
                 VALUES (?,?,?,?,?,'pending',?,?)""",(canonical,int(data.multiples),2.0,float(total),data.declared_payout,created_at,created_at))
             for index,leg in enumerate(data.legs):
