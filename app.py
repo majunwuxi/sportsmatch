@@ -619,7 +619,17 @@ def tick(task):
     with TASK_LOCK:
         with conn() as c:
             current=c.execute("SELECT * FROM tasks WHERE id=? AND enabled=1 AND status IN ('pending','running')",(task["id"],)).fetchone()
-        if not current or _utc_datetime(current["next_check"])>datetime.now(timezone.utc):
+        if not current:
+            return
+        now=datetime.now(timezone.utc)
+        start_at=_utc_datetime(current["start_at"])
+        if start_at>now:
+            # Never poll before the configured monitoring start, even if another
+            # code path left next_check earlier than start_at.
+            with conn() as c:
+                c.execute("UPDATE tasks SET next_check=? WHERE id=? AND enabled=1 AND status IN ('pending','running')",(start_at.isoformat(),task["id"]))
+            return
+        if _utc_datetime(current["next_check"])>now:
             return
         return _tick(dict(current))
 
