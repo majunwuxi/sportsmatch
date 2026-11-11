@@ -457,6 +457,29 @@
         if(pick.state==="won"||pick.state==="lost"){
           const result=document.createElement("span");result.className=`parlay-result-badge parlay-result-${pick.state}`;result.textContent=pick.status_cn||"";row.append(result);
         }else row.append(document.createTextNode(pick.status_cn||leg.status_cn||"等待赛果"));
+        if(pick.market==="basketball_total"){
+          const lineEdit=document.createElement("button");lineEdit.type="button";lineEdit.className="subtle";lineEdit.textContent="修改大小分线";
+          lineEdit.title="修改该投注项的竞彩篮球总分线；保存后会重新计算赛果和返奖";
+          lineEdit.style.cssText="padding:5px 8px;font-size:12px;margin-left:6px";
+          lineEdit.setAttribute("aria-label","修改"+home+"对"+away+"的大小分总分线");
+          lineEdit.onclick=async()=>{
+            const oldLine=Number(pick.line);
+            if(!Number.isFinite(oldLine)){alert("当前总分线无效，无法修改。");return}
+            const raw=prompt("输入新的竞彩篮球总分线（半分值，例如215.5）",String(pick.line));
+            if(raw===null)return;
+            const value=raw.trim(),newLine=Number(value);
+            if(!value||!Number.isFinite(newLine)||newLine<=0||!Number.isInteger(newLine*2)){alert("总分线必须是大于0的半分值，例如215.5。");return}
+            if(newLine===oldLine)return;
+            if(!confirm("确认将"+home+" vs "+away+" · "+pickSelectionLabel(pick)+"的总分线从"+oldLine+"改为"+newLine+"？\n保存后会重新计算本票赛果、返奖和统计，已完赛的比赛也会重算。"))return;
+            lineEdit.disabled=true;lineEdit.textContent="保存中…";
+            try{
+              await core.req("/api/parlays/"+ticket.id+"/lines",{method:"PUT",body:JSON.stringify({changes:[{leg_id:leg.id,pick_index:pickIndex,old_line:oldLine,new_line:newLine}]})});
+              await loadParlays();
+            }catch(error){alert("大小分线修改失败："+(error.message||String(error)))}
+            finally{lineEdit.disabled=false;lineEdit.textContent="修改大小分线"}
+          };
+          row.append(document.createTextNode(" "));row.append(lineEdit);
+        }
       });
       box.append(row);
       if(leg.fixture_id){
