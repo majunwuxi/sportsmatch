@@ -462,23 +462,29 @@
           lineEdit.title="修改该投注项的竞彩篮球总分线；保存后会重新计算赛果和返奖";
           lineEdit.style.cssText="padding:5px 8px;font-size:12px;margin-left:6px";
           lineEdit.setAttribute("aria-label","修改"+home+"对"+away+"的大小分总分线");
-          lineEdit.onclick=async()=>{
-            const oldLine=Number(pick.line);
-            if(!Number.isFinite(oldLine)){alert("当前总分线无效，无法修改。");return}
-            const raw=prompt("输入新的竞彩篮球总分线（半分值，例如215.5）",String(pick.line));
-            if(raw===null)return;
-            const value=raw.trim(),newLine=Number(value);
-            if(!value||!Number.isFinite(newLine)||newLine<=0||!Number.isInteger(newLine*2)){alert("总分线必须是大于0的半分值，例如215.5。");return}
-            if(newLine===oldLine)return;
-            if(!confirm("确认将"+home+" vs "+away+" · "+pickSelectionLabel(pick)+"的总分线从"+oldLine+"改为"+newLine+"？\n保存后会重新计算本票赛果、返奖和统计，已完赛的比赛也会重算。"))return;
-            lineEdit.disabled=true;lineEdit.textContent="保存中…";
+          const lineEditor=document.createElement("span");lineEditor.className="parlay-line-editor";
+          lineEditor.style.cssText="display:none;align-items:center;gap:7px;flex-wrap:wrap;margin:8px 6px;padding:9px 10px;background:#eef5f0;border:1px solid #cbded1;border-radius:8px";
+          const lineInput=document.createElement("input");lineInput.type="number";lineInput.min="0.5";lineInput.step="0.5";lineInput.value=String(pick.line??"");
+          lineInput.setAttribute("aria-label",home+"对"+away+"竞彩篮球大小分总分线");lineInput.style.cssText="width:110px;padding:6px 8px";
+          const saveLine=document.createElement("button");saveLine.type="button";saveLine.className="subtle";saveLine.textContent="保存总分线";saveLine.style.cssText="padding:6px 10px;font-size:12px";
+          const cancelLine=document.createElement("button");cancelLine.type="button";cancelLine.className="subtle";cancelLine.textContent="取消";cancelLine.style.cssText="padding:6px 10px;font-size:12px";
+          const lineStatus=document.createElement("span");lineStatus.className="small";lineStatus.setAttribute("role","status");lineStatus.textContent="保存后会重新计算本票赛果、返奖和统计。";
+          lineEdit.onclick=()=>{lineStatus.textContent="保存后会重新计算本票赛果、返奖和统计。";lineInput.value=String(pick.line??"");lineEditor.style.display="inline-flex";lineInput.focus()};
+          cancelLine.onclick=()=>{lineEditor.style.display="none";lineStatus.textContent=""};
+          saveLine.onclick=async()=>{
+            const oldLine=Number(pick.line),value=lineInput.value.trim(),newLine=Number(value);
+            if(!Number.isFinite(oldLine)){lineStatus.textContent="当前总分线无效，无法修改。";return}
+            if(!value||!Number.isFinite(newLine)||newLine<=0||!Number.isInteger(newLine*2)){lineStatus.textContent="请输入大于0的半分值，例如215.5。";lineInput.focus();return}
+            if(newLine===oldLine){lineStatus.textContent="总分线未变化。";return}
+            saveLine.disabled=true;lineEdit.disabled=true;saveLine.textContent="保存中…";lineStatus.textContent="正在保存并重新计算…";
             try{
               await core.req("/api/parlays/"+ticket.id+"/lines",{method:"PUT",body:JSON.stringify({changes:[{leg_id:leg.id,pick_index:pickIndex,old_line:oldLine,new_line:newLine}]})});
-              await loadParlays();
-            }catch(error){alert("大小分线修改失败："+(error.message||String(error)))}
-            finally{lineEdit.disabled=false;lineEdit.textContent="修改大小分线"}
+              lineStatus.textContent="已保存，正在刷新赛果和返奖…";await loadParlays();
+            }catch(error){lineStatus.textContent="修改失败："+(error.message||String(error))}
+            finally{saveLine.disabled=false;lineEdit.disabled=false;saveLine.textContent="保存总分线"}
           };
-          row.append(document.createTextNode(" "));row.append(lineEdit);
+          lineEditor.append(lineInput,saveLine,cancelLine,lineStatus);
+          row.append(document.createTextNode(" "),lineEdit,document.createTextNode(" "),lineEditor);
         }
       });
       box.append(row);
