@@ -862,6 +862,15 @@ class ParlayOddsUpdateIn(BaseModel):
     legs:list[ParlayOddsLegUpdateIn]=Field(min_length=2,max_length=8)
     multiples:int|None=Field(default=None,gt=0,le=10000,strict=True)
 
+class ParlayTotalLineChangeIn(BaseModel):
+    leg_id:int=Field(gt=0)
+    pick_index:int=Field(ge=0,le=23,strict=True)
+    old_line:float=Field(allow_inf_nan=False)
+    new_line:float=Field(allow_inf_nan=False)
+
+class ParlayTotalLinesUpdateIn(BaseModel):
+    changes:list[ParlayTotalLineChangeIn]=Field(min_length=1,max_length=192)
+
 class ConfirmVoidIn(BaseModel):
     confirmed:bool
 
@@ -1451,6 +1460,47 @@ def update_parlay_odds(parlay_id:int,data:ParlayOddsUpdateIn,_:str=Depends(auth)
     result=sync_parlay(parlay_id,send_notice=False)
     return result or {"ok":True}
 
+@app.put("/api/parlays/{parlay_id}/lines")
+def update_parlay_total_lines(parlay_id:int,data:ParlayTotalLinesUpdateIn,_:str=Depends(auth)):
+    keys=[(item.leg_id,item.pick_index) for item in data.changes]
+    if len(set(keys))!=len(keys):raise HTTPException(422,"大小分盘口修改中存在重复的投注项")
+    if any(not is_half_point_line(item.old_line) or not is_half_point_line(item.new_line) for item in data.changes):
+        raise HTTPException(422,"竞彩篮球大小分总分线必须是半分值")
+    if any(Decimal(str(item.old_line))==Decimal(str(item.new_line)) for item in data.changes):
+        raise HTTPException(422,"新总分线与当前总分线相同")
+    with TASK_LOCK:
+        with conn() as c:
+            if not c.execute("SELECT id FROM parlay_tickets WHERE id=?",(parlay_id,)).fetchone():
+                raise HTTPException(404,"Parlay ticket not found")
+            legs=[dict(row) for row in c.execute("SELECT * FROM parlay_legs WHERE parlay_id=? ORDER BY leg_index",(parlay_id,))]
+            by_id={int(leg["id"]):leg for leg in legs}
+            staged={}
+            for change in data.changes:
+                leg=by_id.get(int(change.leg_id))
+                if not leg:raise HTTPException(422,"比赛腿不属于这张过关票")
+                if leg.get("sport")!="basketball":raise HTTPException(422,"大小分盘口线仅支持竞彩篮球")
+                leg_id=int(leg["id"])
+                if leg_id not in staged:
+                    staged[leg_id]={"leg":leg,"choices":_parlay_leg_choices(leg),"old_json":leg.get("selections_json") or "[]"}
+                choices=staged[leg_id]["choices"]
+                if change.pick_index>=len(choices):raise HTTPException(422,"投注项序号无效，请刷新后重试")
+                pick=choices[change.pick_index]
+                if not isinstance(pick,dict) or pick.get("market")!="basketball_total":
+                    raise HTTPException(422,"只能修改竞彩篮球大小分投注项的总分线")
+                if not is_half_point_line(pick.get("line")):
+                    raise HTTPException(409,"当前大小分总分线无效，请刷新后重试")
+                if Decimal(str(pick["line"]))!=Decimal(str(change.old_line)):
+                    raise HTTPException(409,"当前总分线已变化，请刷新页面后重试")
+                pick["line"]=float(change.new_line)
+            for leg_id,item in staged.items():
+                leg=item["leg"];choices=item["choices"]
+                line=choices[0].get("line") if leg.get("market")=="basketball_total" else leg.get("line")
+                cursor=c.execute("UPDATE parlay_legs SET line=?,selections_json=? WHERE id=? AND parlay_id=? AND selections_json=?",
+                    (line,json.dumps(choices,ensure_ascii=False,separators=(",",":")),leg_id,parlay_id,item["old_json"]))
+                if cursor.rowcount!=1:raise HTTPException(409,"比赛投注项已变化，请刷新后重试")
+            c.execute("UPDATE parlay_tickets SET updated_at=? WHERE id=?",(datetime.now(timezone.utc).isoformat(),parlay_id))
+        result=sync_parlay(parlay_id,send_notice=False)
+    return result or {"ok":True}
 @app.post("/api/parlays/{parlay_id}/stop")
 def stop_parlay(parlay_id:int,_:str=Depends(auth)):
     with TASK_LOCK:
