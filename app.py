@@ -505,6 +505,31 @@ def notify(message):
     out=request_json("https://api.telegram.org/bot"+token+"/sendMessage",post={"chat_id":chat,"text":message})
     if not out.get("ok"): raise RuntimeError("Telegram sendMessage failed")
 
+def notify_safely(message,context):
+    try:
+        notify(message)
+        return True
+    except Exception as e:
+        print(f"{context} notification failed:",repr(e),flush=True)
+        return False
+
+def finish_poll_side_effects(task_id,fixture_id,message,send_message):
+    errors=[]
+    try:
+        sync_parlays_for_fixture(fixture_id)
+    except Exception as e:
+        print(f"parlay sync failed after score save for fixture {fixture_id}:",repr(e),flush=True)
+        errors.append("关联过关票同步失败")
+    if send_message and not notify_safely(message,f"task {task_id}"):
+        errors.append("通知发送失败")
+    if errors:
+        try:
+            with conn() as c:
+                c.execute("UPDATE tasks SET error=? WHERE id=?",
+                    ("比分已保存；"+"；".join(errors)+"，详见服务器日志",task_id))
+        except Exception as e:
+            print(f"could not record post-poll error for task {task_id}:",repr(e),flush=True)
+
 def score_result(home,away):
     return "胜" if home>away else "负" if home<away else "平"
 
@@ -676,7 +701,7 @@ def _tick_basketball(task):
     elif not tickets:message+="\n该比赛比分会供关联的竞彩篮球过关票结算使用。"
     elif tickets:message+="\n命中投注："+("；".join(f"{r['market_label']} {r['selection']} ¥{r['stake']:g} → 返奖 ¥{r['payout']:.2f}" for r in result["tickets"] if r["won"] is True) or "当前暂无命中")
     changed=task.get("last_score")!=score or task.get("provider_status")!=provider_status
-    if changed or closed:notify(message)
+    # Notifications happen only after the score and task status are committed.
     task_status="review_required" if requires_review else "finished" if closed else "running"
     kickoff=_bdl_datetime(game.get("datetime") or game.get("date"))
     kickoff_value=kickoff.isoformat() if kickoff else None
@@ -685,7 +710,7 @@ def _tick_basketball(task):
             finished_at=CASE WHEN ?='finished' THEN COALESCE(finished_at,?) ELSE finished_at END,error=NULL
             WHERE id=? AND enabled=1 AND status IN ('pending','running')""",
             (kickoff_value,score,score,provider_status,now.isoformat(),next_at,task_status,task_status,now.isoformat(),task["id"]))
-    sync_parlays_for_fixture(int(task["fixture_id"]))
+    finish_poll_side_effects(task["id"],int(task["fixture_id"]),message,changed or closed)
 
 def _tick(task):
     if task.get("sport","football")=="basketball":return _tick_basketball(task)
@@ -730,13 +755,13 @@ def _tick(task):
     elif not closed: message+="\n仅为当前比分试算，不代表最终中奖结果"
     changed=task.get("last_score")!=score or task.get("provider_status")!=status
     should_send=(changed and (score is not None or task.get("provider_status")!=status)) or closed
-    if should_send: notify(message)
+    # Notification delivery must not prevent the score from being committed.
     task_status="review_required" if status in VOID else "finished" if closed else "running"
     with conn() as c:
         league_name=(f.get("league") or {}).get("name")
         c.execute("UPDATE tasks SET league_name=COALESCE(league_name,?),last_score=?,settlement_score=?,half_score=?,provider_status=?,last_check=?,next_check=?,status=?,finished_at=CASE WHEN ?='finished' THEN COALESCE(finished_at,?) ELSE finished_at END,error=NULL WHERE id=? AND enabled=1 AND status IN ('pending','running')",
              (league_name,score,regulation_score,f"{half_h}:{half_a}" if half_h is not None and half_a is not None else None,status,now.isoformat(),next_at,task_status,task_status,now.isoformat(),task["id"]))
-    sync_parlays_for_fixture(fid)
+    finish_poll_side_effects(task["id"],fid,message,should_send)
 
 def poll_loop():
     while not STOP.wait(5):
@@ -754,7 +779,7 @@ def poll_loop():
                             if current and current["enabled"] and current["status"] in {"pending","running"}:
                                 retry_at=datetime.now(timezone.utc)+timedelta(minutes=max(5,current["interval_minutes"]))
                                 next_at=max(_utc_datetime(current["next_check"]),retry_at).isoformat()
-                                c.execute("UPDATE tasks SET error=?,next_check=? WHERE id=?",(type(e).__name__+": provider/notification request failed; see protected server logs",next_at,task["id"]))
+                                c.execute("UPDATE tasks SET error=?,next_check=? WHERE id=?",(type(e).__name__+": score polling failed; see protected server logs",next_at,task["id"]))
         except Exception as e:
             print("poll_loop:",repr(e),flush=True)
 
@@ -1097,8 +1122,8 @@ def sync_parlay(parlay_id,send_notice=True):
         for leg in result["legs"]:
             parts.append(f"{leg['home']} {leg['score'] or '—'} {leg['away']} · {leg['market_label']} {leg['selection']} · {leg['status_cn']}")
         parts.append(f"返奖：¥{result['payout']:.2f} · 净利：{('¥%+.2f'%result['net']) if result['net'] is not None else '待核验'}")
-        notify("\n".join(parts))
-        with conn() as c:c.execute("UPDATE parlay_tickets SET last_notified_state=? WHERE id=?",(result["status"],parlay_id))
+        if notify_safely("\n".join(parts),f"parlay {parlay_id}"):
+            with conn() as c:c.execute("UPDATE parlay_tickets SET last_notified_state=? WHERE id=?",(result["status"],parlay_id))
     return result
 
 def sync_parlays_for_fixture(fixture_id):
