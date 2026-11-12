@@ -712,6 +712,10 @@ def _tick_basketball(task):
             (kickoff_value,score,score,provider_status,now.isoformat(),next_at,task_status,task_status,now.isoformat(),task["id"]))
     finish_poll_side_effects(task["id"],int(task["fixture_id"]),message,changed or closed)
 
+def normalize_fixture_team_name(name):
+    value=" ".join(str(name or "").strip().casefold().split())
+    return {"czech republic":"czechia"}.get(value,value)
+
 def _tick(task):
     if task.get("sport","football")=="basketball":return _tick_basketball(task)
     fid=task["fixture_id"]
@@ -721,7 +725,9 @@ def _tick(task):
     if int(f["fixture"]["id"])!=fid:raise RuntimeError("Unexpected fixture")
     home=f["teams"]["home"]["name"]
     away=f["teams"]["away"]["name"]
-    if home!=task["home"] or away!=task["away"]:raise RuntimeError("Team mismatch")
+    if (normalize_fixture_team_name(home)!=normalize_fixture_team_name(task["home"]) or
+        normalize_fixture_team_name(away)!=normalize_fixture_team_name(task["away"])):
+        raise RuntimeError(f"Team mismatch: task expects {task['home']} vs {task['away']}; API-Football returned {home} vs {away}")
     status=f["fixture"]["status"]["short"]
     goals=f.get("goals") or {}
     h=goals.get("home"); a=goals.get("away")
