@@ -763,6 +763,15 @@ def _tick(task):
              (league_name,score,regulation_score,f"{half_h}:{half_a}" if half_h is not None and half_a is not None else None,status,now.isoformat(),next_at,task_status,task_status,now.isoformat(),task["id"]))
     finish_poll_side_effects(task["id"],fid,message,should_send)
 
+def safe_exception_detail(exc):
+    detail=str(exc).strip()
+    for name in ("APISPORTS_KEY","BALLDONTLIE_API_KEY","TELEGRAM_BOT_TOKEN","DATABASE_URL"):
+        secret=os.getenv(name,"")
+        if secret:
+            detail=detail.replace(secret,"[redacted]")
+    detail=re.sub(r"bot[0-9]+:[A-Za-z0-9_-]+","bot[redacted]",detail)
+    return detail[:800] or "(no exception detail)"
+
 def poll_loop():
     while not STOP.wait(5):
         now=datetime.now(timezone.utc).isoformat()
@@ -773,6 +782,7 @@ def poll_loop():
                 task=dict(row)
                 try:tick(task)
                 except Exception as e:
+                    print(f"task_poll_error task_id={task['id']} fixture_id={task['fixture_id']} {type(e).__name__}: {safe_exception_detail(e)}",flush=True)
                     with TASK_LOCK:
                         with conn() as c:
                             current=c.execute("SELECT enabled,status,next_check,interval_minutes FROM tasks WHERE id=?",(task["id"],)).fetchone()
