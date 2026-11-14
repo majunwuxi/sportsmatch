@@ -203,7 +203,7 @@ async function createTicketPlanImage(task,summary){
   }
   const totalY=y+6;roundedCanvasRect(ctx,pad,totalY,contentWidth,100,16,"#173d31");
   ctx.fillStyle="#dce9df";ctx.font="650 16px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText("总金额  /  TOTAL STAKE",pad+24,totalY+39);
-  ctx.fillStyle="#ffffff";ctx.font="850 46px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.textAlign="right";ctx.fillText(money(data.total),width-pad-26,totalY+72);ctx.textAlign="left";
+  ctx.fillStyle="#ffffff";ctx.font="850 50px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.textAlign="right";ctx.fillText(money(data.total),width-pad-26,totalY+72);ctx.textAlign="left";
   ctx.fillStyle="#718178";ctx.font="500 12px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText("生成时间 / GENERATED  "+new Date().toLocaleString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false}),pad,height-22);
   const blob=await new Promise((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(Error("图片生成失败，请重试")),"image/png"));
   const url=URL.createObjectURL(blob),dialog=document.getElementById("ticketImageDialog"),preview=document.getElementById("ticketImagePreview"),title=document.getElementById("ticketImageTitle"),previousUrl=dialog.dataset.previewUrl;
