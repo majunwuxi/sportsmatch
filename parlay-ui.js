@@ -417,7 +417,7 @@
     ctx.fillStyle="#dce9df";ctx.font="650 16px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";
     ctx.fillText(`过关组合  ${ticket.combination_count}注  ·  每注投入 ${money(2*Number(ticket.multiples||1))}`,pad+24,summaryY+38);
     ctx.fillText("总投入  /  TOTAL STAKE",pad+24,summaryY+76);
-    ctx.textAlign="right";ctx.fillStyle="#fff";ctx.font="850 46px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText(money(ticket.total_stake),width-pad-24,summaryY+80);ctx.textAlign="left";
+    ctx.textAlign="right";ctx.fillStyle="#fff";ctx.font="850 50px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";ctx.fillText(money(ticket.total_stake),width-pad-24,summaryY+80);ctx.textAlign="left";
     ctx.fillStyle="#718178";ctx.font="500 12px Inter, 'Noto Sans SC', 'Microsoft YaHei', sans-serif";
     ctx.fillText("生成时间 / 北京时间  "+new Date().toLocaleString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false}),pad,canvas.height-16);
     const blob=await new Promise((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(Error("图片生成失败，请重试")),"image/png"));
@@ -434,7 +434,7 @@
     const editing=editingParlays.has(ticketKey)&&!isFinal;
     const box=document.createElement("article");box.className="parlay-ticket"+(cardAge==="old"?" parlay-finished-old":cardAge==="finished"?" parlay-finished":"");
     const top=document.createElement("div");top.className="row";
-    const title=document.createElement("strong");title.textContent=`${ticket.pass_type} · ${ticket.multiples}倍 · ${ticket.combination_count}注`;
+    const title=document.createElement("strong");title.textContent=`过关票 #${ticket.id} · ${ticket.pass_type} · ${ticket.multiples}倍 · ${ticket.combination_count}注`;
     const badge=document.createElement("span");badge.className="pill";badge.textContent=ticket.status_cn;
     const indicators=document.createElement("div");indicators.className="parlay-ticket-indicators";indicators.append(badge);
     const confirmedPayout=Number(ticket.payout);
