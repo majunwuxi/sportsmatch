@@ -1051,3 +1051,36 @@ def test_task_list_masks_payouts_for_review_required_tasks(client):
     assert row['settlement']['net'] is None
     assert row['settlement']['tickets'][0]['won'] is None
     assert row['settlement']['tickets'][0]['payout']==0
+
+def test_combination_rows_carry_only_table_fields():
+    parent={'id':1,'pass_type':'2串1','multiples':1,'unit_stake':2,'total_stake':2,'declared_payout':None}
+    legs=[
+        {'id':1,'leg_index':0,'fixture_id':101,'sport':'football','home':'H1','away':'A1','league_name':'L',
+         'market':'match_result','selection':'主胜','odds':'2.00','void_confirmed':0},
+        {'id':2,'leg_index':1,'fixture_id':102,'sport':'football','home':'H2','away':'A2','league_name':'L',
+         'market':'match_result','selection':'客胜','odds':'3.00','void_confirmed':0},
+    ]
+    tasks={101:{'status':'finished','settlement_score':'1:0','last_score':'1:0'},
+           102:{'status':'finished','settlement_score':'0:1','last_score':'0:1'}}
+    result=m.evaluate_parlay(parent,legs,tasks)
+    combo=result['combinations'][0]
+    assert combo['state']=='won'
+    # The per-leg entry stays small; the heavy per-ticket fields are not copied.
+    assert set(combo['legs'][0])=={'fixture_id','home','away','home_cn','away_cn','market','market_label',
+        'selection','handicap','line','odds','state','status_cn','current_result'}
+    assert json.dumps(combo,ensure_ascii=False).count('selections')==0
+
+def test_json_responses_are_gzipped_and_decode_identically(client):
+    _seed_task(34,'A','B',status='running')
+    auth=('test','test-password')
+    plain=client.get('/api/tasks',auth=auth,headers={'accept-encoding':'identity'})
+    assert plain.headers.get('content-encoding') is None
+    assert plain.headers.get('vary')=='Accept-Encoding'
+
+    zipped=client.get('/api/tasks',auth=auth,headers={'accept-encoding':'gzip'})
+    assert zipped.headers.get('content-encoding')=='gzip'
+    assert zipped.headers.get('vary')=='Accept-Encoding'
+
+    # A response below the 1 KB threshold stays uncompressed.
+    small=client.get('/api/health',auth=auth,headers={'accept-encoding':'gzip'})
+    assert small.headers.get('content-encoding') is None

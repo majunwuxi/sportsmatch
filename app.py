@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager, contextmanager
 from functools import lru_cache
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import HTMLResponse, FileResponse, Response
 from pydantic import BaseModel, Field
@@ -905,6 +906,9 @@ async def lifespan(app):
     if poll_lock: poll_lock.close()
 
 app=FastAPI(title="Match Monitor",lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
+# The parlay list carries every settled combination, so an uncompressed response
+# grows to hundreds of KB. Compressing it cuts the wire size by roughly 10x.
+app.add_middleware(GZipMiddleware,minimum_size=1024)
 
 @app.middleware("http")
 async def guard(request:Request, call_next):
@@ -916,6 +920,7 @@ async def guard(request:Request, call_next):
     if "Cache-Control" not in response.headers:
         response.headers["Cache-Control"]="no-store"
     response.headers["X-Content-Type-Options"]="nosniff"
+    response.headers["Vary"]="Accept-Encoding"
     return response
 
 
@@ -1162,11 +1167,18 @@ def evaluate_parlay(parlay,legs,tasks_by_fixture):
             if theoretical is not None:
                 choice_payouts.append(theoretical)
                 if state=="pending":pending_payouts.append(theoretical)
+            # A combination row only needs enough to describe itself in a table.
+            # Copying the whole leg (including every selection and its scores)
+            # made this list 85% of the /api/parlays payload.
             combo_legs=[]
             for index,pick,result in zip(event_indices,selected_choices,selected_results):
-                combo_legs.append({**leg_results[index],**result,"market":pick["market"],"selection":pick["selection"],
-                    "handicap":pick.get("handicap"),"line":pick.get("line"),"odds":float(pick["odds"]),"state":result["state"],
-                    "status_cn":result["status_cn"],"current_result":result["current_result"]})
+                source=leg_results[index]
+                combo_legs.append({"fixture_id":source["fixture_id"],"home":source["home"],"away":source["away"],
+                    "home_cn":source["home_cn"],"away_cn":source["away_cn"],
+                    "market":pick["market"],"market_label":MARKETS.get(pick["market"],"未知玩法"),
+                    "selection":pick["selection"],"handicap":pick.get("handicap"),"line":pick.get("line"),
+                    "odds":float(pick["odds"]),"state":result["state"],"status_cn":result["status_cn"],
+                    "current_result":result["current_result"]})
             combos.append({"number":len(combos)+1,"legs":combo_legs,"state":state,
                 "status_cn":{"won":"中奖","lost":"未中奖","pending":"待结算","review_required":"待核验"}.get(state,state),
                 "stake":float(stake),"payout":float(payout) if payout is not None else None,
