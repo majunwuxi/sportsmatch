@@ -25,7 +25,24 @@
   let legs = [];
   let bindingIndex = null;
   let submitting = false;
+  let parlayItems = [];
+  let parlayRefreshTimer = null;
+  const listCache = new Map();
   const editingParlays=new Set(),parlayOddsDrafts=new Map(),parlayMultipleDrafts=new Map(),savingParlays=new Set();
+
+  // The parlay list is fetched by several flows (duplicate warnings, binding,
+  // the periodic refresh). Reuse a recent response so one click does not
+  // re-download the same list several times. The task list stays fresh because
+  // it is cheap and drives the duplicate-exposure warning.
+  async function cachedList(url,maxAgeMs=15000){
+    const hit=listCache.get(url);
+    if(hit&&Date.now()-hit.at<=maxAgeMs)return hit.value;
+    const value=await core.req(url);
+    listCache.set(url,{at:Date.now(),value});
+    return value;
+  }
+  function rememberList(url,value){listCache.set(url,{at:Date.now(),value})}
+  function forgetList(url){listCache.delete(url)}
 
   const money = value => "¥" + Number(value || 0).toFixed(2);
   const roundTicket = value => Math.round(value * 100 + 1e-8) / 100;
@@ -261,7 +278,7 @@
   }
   function isResolvedPick(pick) { return ["won","lost","void"].includes(String(pick.state||"").toLowerCase()); }
   async function warnExistingBetsBeforeBinding(fixture,targetIndex) {
-    const [parlays,tasks]=await Promise.all([core.req("/api/parlays"),core.req("/api/tasks")]);
+    const [parlays,tasks]=await Promise.all([cachedList("/api/parlays"),core.req("/api/tasks")]);
     const defaultMarketValue=defaultMarket(fixture.sport||"football");
     const draft=targetIndex>=0&&legs[targetIndex]?legs[targetIndex]:{...fixture,selections:[{market:defaultMarketValue,selection:optionsFor(defaultMarketValue)[0]||"胜"}]};
     const currentPicks=legSelections(draft),isSameOutcome=(leg,pick)=>currentPicks.some(current=>riskOutcomeKey(leg,pick)===riskOutcomeKey(draft,current));
@@ -297,7 +314,7 @@
     window.alert("这场比赛已经有 "+singleRows.length+" 个单场投注任务、"+parlayRows.length+" 张未结算过关票。绑定前请核对已有投注：\n\n"+sections.join("\n\n")+(omitted?"\n\n另有 "+omitted+" 条记录未显示。":"")+"\n\n“与本票同结果”表示玩法、投注项及让球/让分/总分线都相同。继续绑定后，创建过关票前仍会再次检查同结果重复投注。");
   }
   async function findDuplicateExposure(pass,multiples) {
-    const [parlays,tasks]=await Promise.all([core.req("/api/parlays"),core.req("/api/tasks")]);
+    const [parlays,tasks]=await Promise.all([cachedList("/api/parlays"),core.req("/api/tasks")]);
     const groups=new Map();
     for(let legIndex=0;legIndex<legs.length;legIndex++){
       const draft=legs[legIndex],fixtureKey=riskFixtureSignature(draft);
@@ -340,10 +357,28 @@
     return "检测到同场同结果重复投注：\n\n"+lines.join("\n")+"\n\n金额按包含该结果的未结算投注组合计算；赛果不利时，列出的投注会同时受影响。\n\n仍要创建这张过关票吗？";
   }
 
+  function parlayRefreshDelay() {
+    if(!parlayItems.length)return 60000;
+    return parlayItems.some(item=>item&&item.final!==true)?30000:120000;
+  }
+  function scheduleParlayRefresh() {
+    if(parlayRefreshTimer)clearTimeout(parlayRefreshTimer);
+    parlayRefreshTimer=null;
+    if(document.hidden)return;
+    parlayRefreshTimer=setTimeout(async()=>{parlayRefreshTimer=null;await loadParlays()},parlayRefreshDelay());
+  }
   async function loadParlays() {
     const host=$("parlayTickets");
-    try { if(root.MatchMonitorSportteryNo){try{await root.MatchMonitorSportteryNo.load()}catch{}} const items=await core.req("/api/parlays");host.replaceChildren();for(const item of items)renderTicket(host,item); }
-    catch(error){host.textContent="过关票接口尚不可用：请先将独立后台升级到包含过关票监测的版本。原有单场监测继续可用。";host.title=error.message||"";}
+    try {
+      const numbersReady=root.MatchMonitorSportteryNo?root.MatchMonitorSportteryNo.load().catch(()=>{}):null;
+      const [items]=await Promise.all([core.req("/api/parlays"),numbersReady]);
+      rememberList("/api/parlays",items);
+      parlayItems=items;
+      host.replaceChildren();
+      for(const item of items)renderTicket(host,item);
+    }
+    catch(error){host.textContent="过关票接口尚不可用：请先将独立后台升级到包含过关票监测的版本。原有单场监测继续可用。";host.title=error.message||""}
+    finally{scheduleParlayRefresh()}
   }
   function parlayCardAge(ticket, now=Date.now()) {
     const legs=ticket.legs||[];
@@ -556,12 +591,24 @@
       if(duplicateGroups.length&&!window.confirm(duplicateExposureMessage(duplicateGroups)))return;
       $("parlayError").textContent="正在创建过关监测…";
       const result=await core.req("/api/parlays",{method:"POST",body:JSON.stringify({pass_type:$("parlayPassType").value,multiples,unit_stake:2,declared_total:total||expected,declared_payout:Number($("parlayDeclaredPayout").value)||null,legs:legs.map(leg=>{const picks=legSelections(leg).map(pick=>({market:pick.market,selection:apiSelection(leg,pick),odds:Number(pick.odds),...(["handicap","basketball_handicap"].includes(pick.market)?{handicap:Number(pick.handicap)}:{}),...(pick.market==="basketball_total"?{line:Number(pick.line)}:{})})),first=picks[0];return{fixture_id:leg.fixture_id,sport:leg.sport||"football",...(leg.sport==="basketball"?{league_code:leg.league_code||"nba"}:{}),...first,selections:picks}})})});
-      legs=[];bindingIndex=null;$("parlayError").textContent=result.resumed_fixture_ids?.length?`过关票已创建；已恢复 ${result.resumed_fixture_ids.length} 个共用比赛监测任务。`:"过关票已创建，赛果将由对应比赛监测任务自动更新。";renderLegs();await loadParlays();
+      legs=[];bindingIndex=null;$("parlayError").textContent=result.resumed_fixture_ids?.length?`过关票已创建；已恢复 ${result.resumed_fixture_ids.length} 个共用比赛监测任务。`:"过关票已创建，赛果将由对应比赛监测任务自动更新。";renderLegs();
+      // The POST response already carries the settled ticket view; show it now
+      // and let the authoritative refresh run in the background.
+      forgetList("/api/parlays");
+      try {
+        if(result&&result.id!==undefined&&result.id!==null){
+          const host=$("parlayTickets"),holder=document.createElement("div");
+          renderTicket(holder,result);
+          while(holder.firstElementChild)host.prepend(holder.firstElementChild);
+        }
+      } catch(error) { console.warn("parlay optimistic render failed",error) }
+      loadParlays();
     }catch(error){$("parlayError").textContent=error.message||String(error)}finally{submitting=false;updateTotals()}
   });
   $("refreshParlays").addEventListener("click",loadParlays);
   for(const id of ["parlayPassType","parlayMultiples","parlayDeclaredTotal","parlayDeclaredPayout"])$(id).addEventListener("input",updateTotals);
   for(const id of ["parlayPassType","parlayMultiples","parlayDeclaredTotal","parlayDeclaredPayout"])$(id).addEventListener("change",updateTotals);
   root.MatchMonitorParlayUI={addFixture,loadParlays,importReceipt,bindLeg(index){bindingIndex=index},cancelBinding:closeFixtureSearch,get bindLegIndex(){return bindingIndex}};
-  renderLegs();loadParlays();setInterval(loadParlays,30000);
+  document.addEventListener("visibilitychange",()=>{if(document.hidden)scheduleParlayRefresh();else loadParlays()});
+  renderLegs();loadParlays();
 })(globalThis);

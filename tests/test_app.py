@@ -278,6 +278,19 @@ def _parlay_body():
         {'fixture_id':12,'market':'match_result','selection':'胜','odds':1.220},
         {'fixture_id':13,'market':'match_result','selection':'胜','odds':1.530}]}
 
+def football_payload(fixture_id,date='2026-10-25T12:00:00Z'):
+    return {'fixture':{'id':fixture_id,'date':date,'status':{'short':'NS'}},
+        'teams':{'home':{'name':f'H{fixture_id}'},'away':{'name':f'A{fixture_id}'}},
+        'league':{'name':'Test League'}}
+
+def football_provider(calls=None):
+    """Fake API-Football that accepts both `id=12` and the batched `id=12-13` form."""
+    def provider(endpoint,params):
+        if calls is not None:calls.append(dict(params))
+        ids=[int(value) for value in str(params['id']).split('-')]
+        return [football_payload(fixture_id) for fixture_id in ids]
+    return provider
+
 def test_multileg_basketball_parlay_reuses_recent_schedule_response(client,monkeypatch):
     games=[{'id':game_id,'date':'2026-10-28','datetime':'2026-10-28T23:00:00Z','status':'7:00 pm ET',
         'home_team':{'full_name':f'Home {game_id}'},'visitor_team':{'full_name':f'Away {game_id}'},
@@ -347,12 +360,7 @@ def test_parlay_loses_if_any_leg_in_a_2_by_1_loses(client):
     assert result['net']==-10
 
 def test_lost_2_by_1_keeps_other_match_monitored(client,monkeypatch):
-    def provider(endpoint,params):
-        fixture_id=int(params['id'])
-        return [{'fixture':{'id':fixture_id,'date':'2026-10-25T12:00:00Z'},
-            'teams':{'home':{'name':f'H{fixture_id}'},'away':{'name':f'A{fixture_id}'}},
-            'league':{'name':'Test League'}}]
-    monkeypatch.setattr(m,'api',provider)
+    monkeypatch.setattr(m,'api',football_provider())
     created=client.post('/api/parlays',auth=('test','test-password'),json=_parlay_body())
     assert created.status_code==200,created.text
     parlay_id=created.json()['id']
@@ -377,12 +385,7 @@ def test_lost_2_by_1_keeps_other_match_monitored(client,monkeypatch):
     assert evaluated['legs'][1]['score']=='2:0'
 
 def test_winning_first_leg_keeps_2_by_1_waiting_for_second_result(client,monkeypatch):
-    def provider(endpoint,params):
-        fixture_id=int(params['id'])
-        return [{'fixture':{'id':fixture_id,'date':'2026-10-25T12:00:00Z'},
-            'teams':{'home':{'name':f'H{fixture_id}'},'away':{'name':f'A{fixture_id}'}},
-            'league':{'name':'Test League'}}]
-    monkeypatch.setattr(m,'api',provider)
+    monkeypatch.setattr(m,'api',football_provider())
     created=client.post('/api/parlays',auth=('test','test-password'),json=_parlay_body())
     assert created.status_code==200,created.text
     with m.conn() as c:
@@ -398,12 +401,7 @@ def test_winning_first_leg_keeps_2_by_1_waiting_for_second_result(client,monkeyp
         assert (second['status'],second['enabled'])==('pending',1)
 
 def test_losing_one_leg_keeps_other_2_by_1_combinations_under_monitor(client,monkeypatch):
-    def provider(endpoint,params):
-        fixture_id=int(params['id'])
-        return [{'fixture':{'id':fixture_id,'date':'2026-10-25T12:00:00Z'},
-            'teams':{'home':{'name':f'H{fixture_id}'},'away':{'name':f'A{fixture_id}'}},
-            'league':{'name':'Test League'}}]
-    monkeypatch.setattr(m,'api',provider)
+    monkeypatch.setattr(m,'api',football_provider())
     body=_parlay_body();body['pass_type']='3串3';body['multiples']=1;body['declared_total']=6;body['declared_payout']=None
     body['legs'].append({'fixture_id':14,'market':'match_result','selection':'胜','odds':1.80})
     created=client.post('/api/parlays',auth=('test','test-password'),json=body)
@@ -454,15 +452,14 @@ def test_active_parlay_prevents_stopping_or_deleting_a_shared_match(client):
 def test_parlay_created_score_only_watchers_stop_with_their_last_ticket(client,monkeypatch):
     calls=[]
     def provider(endpoint,params):
-        fixture_id=int(params['id']);calls.append(fixture_id)
-        return [{'fixture':{'id':fixture_id,'date':'2026-10-25T12:00:00Z'},
-            'teams':{'home':{'name':f'H{fixture_id}'},'away':{'name':f'A{fixture_id}'}},
-            'league':{'name':'Test League'}}]
+        calls.append(params['id'])
+        ids=[int(value) for value in str(params['id']).split('-')]
+        return [football_payload(fixture_id) for fixture_id in ids]
     monkeypatch.setattr(m,'api',provider)
     body=_parlay_body()
     created=client.post('/api/parlays',auth=('test','test-password'),json=body)
     assert created.status_code==200,created.text
-    assert calls==[12,13]
+    assert calls==['12-13']
     assert created.json()['legs'][0]['monitor_start_at']=='2026-10-25T14:00:00+00:00'
     with m.conn() as c:
         assert c.execute('SELECT COUNT(*) FROM tasks').fetchone()[0]==2
@@ -900,7 +897,7 @@ def test_statistics_noon_boundary_history_pending_and_loss(client, monkeypatch):
 def test_statistics_parlay_uses_first_kickoff_and_updates_result(client, monkeypatch):
     with m.conn() as c:
         c.execute("INSERT INTO parlay_tickets(pass_type,multiples,total_stake,created_at,updated_at) VALUES('2串1',1,10,'2026-10-26','2026-10-26')")
-    monkeypatch.setattr(m,'load_parlay',lambda _: ({},[{'kickoff':'2026-10-27T07:00:00+00:00','home':'A','away':'B'},{'kickoff':'2026-10-26T07:00:00+00:00','home':'C','away':'D'}],{}))
+    monkeypatch.setattr(m,'load_parlays',lambda: [({'id':1},[{'kickoff':'2026-10-27T07:00:00+00:00','home':'A','away':'B'},{'kickoff':'2026-10-26T07:00:00+00:00','home':'C','away':'D'}],{})])
     state={'state':'pending','payout':None}
     monkeypatch.setattr(m,'evaluate_parlay',lambda *args:{'combinations':[{'stake':10,**state}],'pass_type':'2串1','total_stake':10,'payout':state['payout'] or 0,'net':None if state['state']=='pending' else state['payout']-10,'legs':[]})
     day=client.get('/api/statistics',auth=('test','test-password')).json()['days']['2026-10-26']
@@ -910,3 +907,94 @@ def test_statistics_parlay_uses_first_kickoff_and_updates_result(client, monkeyp
     state.update(state='won',payout=18)
     day=client.get('/api/statistics',auth=('test','test-password')).json()['days']['2026-10-26']
     assert (day['stake'],day['pending'],day['payout'],day['net'])==(10,0,18,8)
+
+def _seed_tracked_parlay(pass_type='2串1',fixtures=(12,13),multiples=1):
+    now=datetime.now(timezone.utc).isoformat()
+    with m.conn() as c:
+        cur=c.execute("""INSERT INTO parlay_tickets(pass_type,multiples,unit_stake,total_stake,declared_payout,status,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?)""",(pass_type,multiples,2.0,2.0*multiples,None,'pending',now,now))
+        parlay_id=cur.lastrowid
+        for index,fixture_id in enumerate(fixtures):
+            choices=[{'market':'match_result','selection':'主胜','odds':2.0,'handicap':None,'line':None}]
+            c.execute("""INSERT INTO parlay_legs(parlay_id,leg_index,fixture_id,sport,home,away,kickoff,market,selection,odds,selections_json)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (parlay_id,index,fixture_id,'football',f'H{fixture_id}',f'A{fixture_id}','2026-10-25T12:00:00Z',
+                 'match_result','主胜','2.00',json.dumps(choices)))
+    return parlay_id
+
+def test_parlay_list_does_not_write_when_status_is_unchanged(client):
+    _seed_task(12,'H12','A12')
+    _seed_task(13,'H13','A13')
+    parlay_id=_seed_tracked_parlay()
+    with m.conn() as c:
+        before=dict(c.execute("SELECT status,updated_at FROM parlay_tickets WHERE id=?",(parlay_id,)).fetchone())
+    response=client.get('/api/parlays',auth=('test','test-password'))
+    assert response.status_code==200,response.text
+    assert [ticket['status'] for ticket in response.json()]==['pending']
+    with m.conn() as c:
+        after=dict(c.execute("SELECT status,updated_at FROM parlay_tickets WHERE id=?",(parlay_id,)).fetchone())
+    assert after==before
+
+def test_parlay_list_persists_only_a_real_status_transition(client):
+    _seed_task(12,'H12','A12')
+    _seed_task(13,'H13','A13')
+    parlay_id=_seed_tracked_parlay()
+    with m.conn() as c:
+        c.execute("""UPDATE tasks SET status='finished',enabled=0,provider_status='FT',
+            last_score='1:0',settlement_score='1:0' WHERE fixture_id IN (12,13)""")
+    response=client.get('/api/parlays',auth=('test','test-password'))
+    assert response.json()[0]['status']=='won'
+    with m.conn() as c:
+        assert c.execute("SELECT status FROM parlay_tickets WHERE id=?",(parlay_id,)).fetchone()[0]=='won'
+
+def test_load_parlays_batches_rows_in_creation_order(client):
+    _seed_tracked_parlay(fixtures=(12,13))
+    newest=_seed_tracked_parlay(fixtures=(14,15))
+    batch=m.load_parlays()
+    assert [int(parent['id']) for parent,_,_ in batch]==[newest,newest-1]
+    for parent,legs,tasks in batch:
+        assert (parent,legs,tasks)==m.load_parlay(int(parent['id']))
+    assert batch[0][0]['id']==newest and [leg['leg_index'] for leg in batch[0][1]]==[0,1]
+
+def test_parlay_creation_reuses_fixtures_cached_by_search(client,monkeypatch):
+    calls=[]
+    def provider(endpoint,params):
+        calls.append(dict(params))
+        return [football_payload(12,'2026-10-28T12:00:00Z'),football_payload(13,'2026-10-28T12:00:00Z')]
+    monkeypatch.setattr(m,'api',provider)
+    searched=client.get('/api/fixtures?date=2026-10-28',auth=('test','test-password'))
+    assert searched.status_code==200,searched.text
+    assert len(searched.json())==2
+    created=client.post('/api/parlays',auth=('test','test-password'),json=_parlay_body())
+    assert created.status_code==200,created.text
+    assert len(calls)==1
+    with m.conn() as c:
+        assert c.execute('SELECT COUNT(*) FROM football_fixture_cache').fetchone()[0]==2
+
+def test_parlay_creation_requests_missing_fixtures_once(client,monkeypatch):
+    calls=[]
+    monkeypatch.setattr(m,'api',football_provider(calls))
+    created=client.post('/api/parlays',auth=('test','test-password'),json=_parlay_body())
+    assert created.status_code==200,created.text
+    assert len(calls)==1
+    assert calls[0]['id']=='12-13'
+    with m.conn() as c:
+        assert c.execute('SELECT COUNT(*) FROM football_fixture_cache').fetchone()[0]==2
+
+def test_task_creation_reuses_a_cached_fixture(client,monkeypatch):
+    m.cache_football_fixtures([football_payload(12)])
+    monkeypatch.setattr(m,'api',lambda *args,**kwargs:(_ for _ in ()).throw(AssertionError('provider must not be called')))
+    response=client.post('/api/tasks',auth=('test','test-password'),json={
+        'fixture_id':12,'home':'spoof','away':'spoof','start_at':datetime.now(timezone.utc).isoformat(),
+        'interval_minutes':5,'tickets':[]})
+    assert response.status_code==200,response.text
+    assert (response.json()['home'],response.json()['away'])==('H12','A12')
+
+def test_football_fixture_cache_expires_without_serving_stale_data():
+    m.cache_football_fixtures([football_payload(12)])
+    with m.conn() as c:
+        c.execute("UPDATE football_fixture_cache SET fetched_at=fetched_at-? WHERE fixture_id=12",
+            (m.FOOTBALL_FIXTURE_CACHE_TTL_SECONDS+1,))
+    assert m.cached_football_fixture(12) is None
+    with m.conn() as c:
+        assert c.execute('SELECT COUNT(*) FROM football_fixture_cache').fetchone()[0]==0

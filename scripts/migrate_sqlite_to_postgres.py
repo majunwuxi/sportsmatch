@@ -20,6 +20,7 @@ TABLES = (
     "usage",
     "sporttery_match_numbers",
     "basketball_fixture_cache",
+    "football_fixture_cache",
     "parlay_tickets",
     "parlay_legs",
 )
@@ -78,14 +79,19 @@ def main() -> int:
             raise SystemExit(f"SQLite integrity check failed: {check}")
         source_columns = {}
         source_counts = {}
+        source_tables = {row[0] for row in sqlite_db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         for table in TABLES:
+            if table not in source_tables:
+                # Cache tables are optional: an older database may not have them yet.
+                continue
             cursor = sqlite_db.execute(f'SELECT * FROM "{table}" LIMIT 0')
             source_columns[table] = [column[0] for column in cursor.description]
             source_counts[table] = int(sqlite_db.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
+    migrated_tables = [table for table in TABLES if table in source_columns]
 
     target_counts = {}
     with monitor.conn() as pg:
-        for table in TABLES:
+        for table in migrated_tables:
             row = pg.execute(f'SELECT COUNT(*) AS row_count FROM "{table}"').fetchone()
             target_counts[table] = int(row["row_count"])
             columns = pg.execute(
@@ -107,7 +113,7 @@ def main() -> int:
         raise SystemExit(f"PostgreSQL already contains rows; refusing to overwrite: {nonempty}")
 
     print("Source SQLite rows:")
-    for table in TABLES:
+    for table in migrated_tables:
         print(f"  {table}: {source_counts[table]}")
     print("PostgreSQL target is empty and table columns match.")
 
@@ -125,7 +131,7 @@ def main() -> int:
     with sqlite3.connect(source) as sqlite_db:
         sqlite_db.row_factory = sqlite3.Row
         with monitor.conn() as pg:
-            for table in TABLES:
+            for table in migrated_tables:
                 columns = source_columns[table]
                 if not columns:
                     continue
@@ -145,14 +151,14 @@ def main() -> int:
                 )
 
             copied_counts = {}
-            for table in TABLES:
+            for table in migrated_tables:
                 row = pg.execute(f'SELECT COUNT(*) AS row_count FROM "{table}"').fetchone()
                 copied_counts[table] = int(row["row_count"])
             if copied_counts != source_counts:
                 raise RuntimeError(f"Row count mismatch; source={source_counts}, target={copied_counts}")
 
     print("Migration committed. Row counts match:")
-    for table in TABLES:
+    for table in migrated_tables:
         print(f"  {table}: {source_counts[table]}")
     print("SQLite was retained for rollback.")
     return 0

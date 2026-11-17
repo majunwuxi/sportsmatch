@@ -55,6 +55,9 @@ LOCK=threading.Lock()
 BALLDONTLIE_LOCK=threading.Lock()
 BALLDONTLIE_LAST_REQUEST=0.0
 BALLDONTLIE_FIXTURE_CACHE_TTL_SECONDS=30*60
+# Search results are cached so creating a monitor does not spend another
+# API-Football request per leg; a stale entry only triggers one fresh lookup.
+FOOTBALL_FIXTURE_CACHE_TTL_SECONDS=30*60
 TASK_LOCK=threading.RLock()
 POLL_ENABLED=os.getenv("ENABLE_POLLER","false").lower()=="true"
 LISTED_WINS={"1:0","2:0","2:1","3:0","3:1","3:2","4:0","4:1","4:2","5:0","5:1","5:2"}
@@ -206,6 +209,11 @@ def init_db():
               fetched_at DOUBLE PRECISION NOT NULL,
               PRIMARY KEY(league_code,provider_game_id)
             )""",
+            """CREATE TABLE IF NOT EXISTS football_fixture_cache (
+              fixture_id BIGINT PRIMARY KEY,
+              payload_json TEXT NOT NULL,
+              fetched_at DOUBLE PRECISION NOT NULL
+            )""",
             """CREATE TABLE IF NOT EXISTS parlay_tickets (
               id BIGSERIAL PRIMARY KEY,
               pass_type TEXT NOT NULL,
@@ -273,6 +281,11 @@ def init_db():
           payload_json TEXT NOT NULL,
           fetched_at REAL NOT NULL,
           PRIMARY KEY(league_code,provider_game_id)
+        );
+        CREATE TABLE IF NOT EXISTS football_fixture_cache (
+          fixture_id INTEGER PRIMARY KEY,
+          payload_json TEXT NOT NULL,
+          fetched_at REAL NOT NULL
         );
         CREATE TABLE IF NOT EXISTS parlay_tickets (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -428,6 +441,72 @@ def cached_basketball_fixture(league_code,provider_game_id):
         try:payload=json.loads(row["payload_json"])
         except (TypeError,json.JSONDecodeError):return None
         return payload if isinstance(payload,dict) else None
+
+def cache_football_fixtures(rows):
+    now=time.time()
+    entries=[]
+    for row in rows:
+        try:fixture_id=int((row.get("fixture") or {}).get("id"))
+        except (AttributeError,TypeError,ValueError):continue
+        entries.append((fixture_id,json.dumps(row,ensure_ascii=False,separators=(",",":")),now))
+    if not entries:return
+    with conn() as c:
+        c.executemany("""INSERT INTO football_fixture_cache(fixture_id,payload_json,fetched_at) VALUES (?,?,?)
+            ON CONFLICT(fixture_id) DO UPDATE SET payload_json=excluded.payload_json,fetched_at=excluded.fetched_at""",entries)
+        c.execute("DELETE FROM football_fixture_cache WHERE fetched_at<?",(now-FOOTBALL_FIXTURE_CACHE_TTL_SECONDS,))
+
+def cached_football_fixtures(fixture_ids):
+    ids=sorted({int(value) for value in fixture_ids})
+    if not ids:return {}
+    with conn() as c:
+        rows=c.execute("SELECT fixture_id,payload_json,fetched_at FROM football_fixture_cache WHERE fixture_id IN ("
+            +",".join("?" for _ in ids)+")",ids).fetchall()
+        fresh={}
+        expired=[]
+        now=time.time()
+        for row in rows:
+            fixture_id=int(row["fixture_id"])
+            if now-float(row["fetched_at"])>FOOTBALL_FIXTURE_CACHE_TTL_SECONDS:
+                expired.append(fixture_id)
+                continue
+            try:payload=json.loads(row["payload_json"])
+            except (TypeError,json.JSONDecodeError):continue
+            if isinstance(payload,dict):fresh[fixture_id]=payload
+        if expired:
+            c.execute("DELETE FROM football_fixture_cache WHERE fixture_id IN ("
+                +",".join("?" for _ in expired)+")",expired)
+    return fresh
+
+def cached_football_fixture(fixture_id):
+    return cached_football_fixtures([fixture_id]).get(int(fixture_id))
+
+def football_fixtures_by_id(fixture_ids):
+    """Return provider payloads for the requested fixtures, reusing search results.
+
+    Misses are fetched in one API-Football request (comma-free `id=1-2-3` form) so
+    creating an N-leg ticket costs at most one provider round trip.
+    """
+    ids=[]
+    for value in fixture_ids:
+        try:fixture_id=int(value)
+        except (TypeError,ValueError):continue
+        if fixture_id>0 and fixture_id not in ids:ids.append(fixture_id)
+    found=cached_football_fixtures(ids)
+    missing=[fixture_id for fixture_id in ids if fixture_id not in found]
+    if missing:
+        lookup=missing[0] if len(missing)==1 else "-".join(str(fixture_id) for fixture_id in missing)
+        rows=api("fixtures",{"id":lookup,"timezone":"Asia/Shanghai"})
+        cache_football_fixtures(rows)
+        for row in rows:
+            try:fixture_id=int((row.get("fixture") or {})["id"])
+            except (KeyError,TypeError,ValueError):continue
+            found[fixture_id]=row
+    return found
+
+def football_fixture(fixture_id):
+    fixture=football_fixtures_by_id([fixture_id]).get(int(fixture_id))
+    if fixture is None:raise HTTPException(422,"Fixture not accessible")
+    return fixture
 
 def _bdl_state(game):
     state=str(game.get("status_state") or "").strip().lower()
@@ -1105,15 +1184,39 @@ def evaluate_parlay(parlay,legs,tasks_by_fixture):
         "net":float(_money(confirmed_payout-total)) if status in {"won","lost"} else None,
         "status":status,"status_cn":PARLAY_STATUS_CN[status],"final":status in {"won","lost"},"legs":leg_results,"combinations":combos}
 
-def load_parlay(parlay_id):
+def load_parlays(parlay_ids=None):
+    """Load parent rows, legs and linked tasks for many parlays in three queries."""
     with conn() as c:
-        parent=c.execute("SELECT * FROM parlay_tickets WHERE id=?",(parlay_id,)).fetchone()
-        if not parent: return None
-        legs=[dict(row) for row in c.execute("SELECT * FROM parlay_legs WHERE parlay_id=? ORDER BY leg_index",(parlay_id,))]
-        fixture_ids=[int(row["fixture_id"]) for row in legs]
+        if parlay_ids is None:
+            parents=[dict(row) for row in c.execute("SELECT * FROM parlay_tickets ORDER BY created_at DESC, id DESC")]
+        else:
+            order={}
+            for index,value in enumerate(parlay_ids):order.setdefault(int(value),index)
+            ids=sorted(order)
+            if not ids:return []
+            parents=[dict(row) for row in c.execute(
+                "SELECT * FROM parlay_tickets WHERE id IN ("+",".join("?" for _ in ids)+")",ids)]
+            parents.sort(key=lambda row:order[int(row["id"])])
+        if not parents:return []
+        parent_ids=[int(row["id"]) for row in parents]
+        legs=[dict(row) for row in c.execute(
+            "SELECT * FROM parlay_legs WHERE parlay_id IN ("+",".join("?" for _ in parent_ids)+") ORDER BY parlay_id,leg_index",parent_ids)]
+        fixture_ids=sorted({int(row["fixture_id"]) for row in legs})
         tasks={int(row["fixture_id"]):dict(row) for row in c.execute(
             "SELECT * FROM tasks WHERE fixture_id IN ("+",".join("?" for _ in fixture_ids)+")",fixture_ids)} if fixture_ids else {}
-    return dict(parent),legs,tasks
+    grouped={parlay_id:[] for parlay_id in parent_ids}
+    for leg in legs:grouped[int(leg["parlay_id"])].append(leg)
+    return [(parent,grouped[int(parent["id"])],tasks) for parent in parents]
+
+def load_parlay(parlay_id):
+    loaded=load_parlays([parlay_id])
+    return loaded[0] if loaded else None
+
+def parlay_result(parent,legs,tasks):
+    result=evaluate_parlay(parent,legs,tasks)
+    if parent.get("status")=="stopped":
+        result["status"]="stopped";result["status_cn"]=PARLAY_STATUS_CN["stopped"];result["net"]=None;result["final"]=False
+    return result
 
 def pending_parlay_fixture_ids():
     with conn() as c:
@@ -1122,19 +1225,17 @@ def pending_parlay_fixture_ids():
             LEFT JOIN tasks t ON t.fixture_id=l.fixture_id
             WHERE p.status!='stopped' AND (t.id IS NULL OR t.status NOT IN ('finished','review_required'))""")}
 
-def sync_parlay(parlay_id,send_notice=True):
+def sync_parlay(parlay_id,send_notice=True,pending=None):
     loaded=load_parlay(parlay_id)
     if not loaded:return None
     parent,legs,tasks=loaded
-    result=evaluate_parlay(parent,legs,tasks)
+    result=parlay_result(parent,legs,tasks)
     stopped=parent.get("status")=="stopped"
-    if stopped:
-        result["status"]="stopped";result["status_cn"]=PARLAY_STATUS_CN["stopped"];result["net"]=None;result["final"]=False
     with conn() as c:
         if not stopped:c.execute("UPDATE parlay_tickets SET status=?,updated_at=? WHERE id=?",(result["status"],datetime.now(timezone.utc).isoformat(),parlay_id))
         current=c.execute("SELECT last_notified_state FROM parlay_tickets WHERE id=?",(parlay_id,)).fetchone()
         last=current["last_notified_state"] if current else None
-    stop_unused_parlay_watchers([int(leg["fixture_id"]) for leg in legs])
+    stop_unused_parlay_watchers([int(leg["fixture_id"]) for leg in legs],pending)
     if send_notice and result["status"] in {"won","lost","review_required"} and result["status"]!=last:
         parts=[f"🎟️ 过关票状态：{result['status_cn']}",f"方式：{result['pass_type']} · {result['multiples']}倍 · {result['combination_count']}注",f"总投入：¥{result['total_stake']:.2f}"]
         for leg in result["legs"]:
@@ -1147,7 +1248,9 @@ def sync_parlay(parlay_id,send_notice=True):
 def sync_parlays_for_fixture(fixture_id):
     with conn() as c:
         ids=[row["id"] for row in c.execute("SELECT DISTINCT p.id FROM parlay_tickets p JOIN parlay_legs l ON l.parlay_id=p.id WHERE l.fixture_id=? AND p.status!='stopped'",(fixture_id,))]
-    for parlay_id in ids:sync_parlay(parlay_id)
+    if not ids:return
+    pending=pending_parlay_fixture_ids()
+    for parlay_id in ids:sync_parlay(parlay_id,pending=pending)
 
 @app.get("/api/health")
 def health(_:str=Depends(auth)):
@@ -1189,6 +1292,7 @@ def fixtures(date:str=Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),q:str="",sport:Liter
              league_code:Literal["nba","wnba"]="nba",_:str=Depends(auth)):
     if sport=="basketball":return basketball_fixtures(date,q,league_code)
     matches=api("fixtures",{"date":date,"timezone":"Asia/Shanghai"})
+    cache_football_fixtures(matches)
     term=q.strip().casefold()
     search_terms=[term] if term else []
     if term:
@@ -1310,11 +1414,8 @@ def statistics(_:str=Depends(auth)):
             line=f"（让球/让分 {pick['handicap']}）" if pick.get("handicap") is not None else f"（总分 {pick['line']}）" if pick.get("line") is not None else ""
             home,away=task["home"],task["away"]
             details.setdefault(key,[]).append({"type":"single","id":task["id"],"kickoff":task.get("kickoff"),"match":home+" vs "+away,"matches":[{"home":home,"away":away,"home_cn":task.get("home_cn") or BASKETBALL_TEAM_NAMES_ZH.get(home,""),"away_cn":task.get("away_cn") or BASKETBALL_TEAM_NAMES_ZH.get(away,"")}],"market":pick["market_label"],"selection":f"{pick['selection']}{line} · SP {pick['odds']}","stake":pick["stake"],"payout":pick["payout"] if settled else None,"net":pick["payout"]-pick["stake"] if settled else None})
-    with conn() as c:ids=[row["id"] for row in c.execute("SELECT id FROM parlay_tickets")]
-    for parlay_id in ids:
-        loaded=load_parlay(parlay_id)
-        if not loaded:continue
-        parent,legs,linked_tasks=loaded
+    for parent,legs,linked_tasks in load_parlays():
+        parlay_id=int(parent["id"])
         keys=[date_key(leg.get("kickoff")) for leg in legs]
         if not keys or any(key is None for key in keys):missing+=1;continue
         key=min(keys)
@@ -1348,12 +1449,22 @@ def statistics(_:str=Depends(auth)):
 
 @app.get("/api/parlays")
 def get_parlays(_:str=Depends(auth)):
-    with conn() as c: ids=[row["id"] for row in c.execute("SELECT id FROM parlay_tickets ORDER BY created_at DESC")]
-    result=[]
-    for parlay_id in ids:
-        item=sync_parlay(parlay_id,send_notice=False)
-        if item:result.append(item)
-    return result
+    loaded=load_parlays()
+    views=[parlay_result(parent,legs,tasks) for parent,legs,tasks in loaded]
+    # Reading the list must stay cheap: status and watcher cleanup are touched
+    # only when a ticket really changes state, never on a steady-state read.
+    changed=[(view["status"],int(parent["id"])) for (parent,_,_),view in zip(loaded,views)
+             if parent.get("status")!="stopped" and view["status"]!=parent.get("status")]
+    if changed:
+        stamp=datetime.now(timezone.utc).isoformat()
+        with conn() as c:
+            c.executemany("UPDATE parlay_tickets SET status=?,updated_at=? WHERE id=?",
+                [(status,stamp,parlay_id) for status,parlay_id in changed])
+        # Only a real transition can leave a parlay-only watcher without a ticket.
+        settled={parlay_id for _,parlay_id in changed}
+        stop_unused_parlay_watchers([int(leg["fixture_id"]) for parent,legs,_ in loaded
+            if int(parent["id"]) in settled for leg in legs])
+    return views
 
 @app.post("/api/parlays")
 def create_parlay(data:ParlayIn,_:str=Depends(auth)):
@@ -1397,6 +1508,12 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
     with conn() as c:
         existing={int(row["fixture_id"]):dict(row) for row in c.execute(
             "SELECT * FROM tasks WHERE fixture_id IN ("+",".join("?" for _ in fixture_ids)+")",fixture_ids)}
+    # Validate every missing football leg with at most one provider request; the
+    # search that produced these fixtures already cached them, so this is usually
+    # a pure database read.
+    missing_football=[int(leg.fixture_id) for leg in data.legs
+        if leg.sport!="basketball" and internal_ids[id(leg)] not in existing]
+    football_data=football_fixtures_by_id(missing_football) if missing_football else {}
     for leg in data.legs:
         internal_id=internal_ids[id(leg)]
         if internal_id in existing:continue
@@ -1415,10 +1532,9 @@ def create_parlay(data:ParlayIn,_:str=Depends(auth)):
             fixtures[internal_id]={"sport":"basketball","provider_game_id":str(leg.fixture_id),"league_code":leg.league_code,
                 "home":home,"away":away,"league_name":league_name,"kickoff":kickoff.isoformat()}
         else:
-            rows=api("fixtures",{"id":leg.fixture_id,"timezone":"Asia/Shanghai"})
-            if len(rows)!=1 or int(rows[0].get("fixture",{}).get("id",0))!=leg.fixture_id:
+            fixture=football_data.get(int(leg.fixture_id))
+            if fixture is None or int((fixture.get("fixture") or {}).get("id",0))!=leg.fixture_id:
                 raise HTTPException(422,f"第{data.legs.index(leg)+1}场比赛无法在 API-Football 中核实")
-            fixture=rows[0]
             fixtures[internal_id]={"sport":"football","provider_game_id":str(leg.fixture_id),"league_code":None,
                 "home":fixture["teams"]["home"]["name"],"away":fixture["teams"]["away"]["name"],
                 "league_name":(fixture.get("league") or {}).get("name"),"kickoff":fixture["fixture"]["date"]}
@@ -1581,8 +1697,8 @@ def has_open_parlay_for_fixture(fixture_id):
         return c.execute("""SELECT 1 FROM parlay_legs l JOIN parlay_tickets p ON p.id=l.parlay_id
             WHERE l.fixture_id=? AND p.status IN ('pending','review_required') LIMIT 1""",(fixture_id,)).fetchone() is not None
 
-def stop_unused_parlay_watchers(fixture_ids):
-    required=pending_parlay_fixture_ids()
+def stop_unused_parlay_watchers(fixture_ids,required=None):
+    if required is None:required=pending_parlay_fixture_ids()
     with conn() as c:
         for fixture_id in set(fixture_ids):
             if int(fixture_id) in required:continue
@@ -1622,9 +1738,7 @@ def create_task(data:TaskIn,_:str=Depends(auth)):
         internal_fixture_id=namespace+data.fixture_id
     else:
         # Confirm match identity from the provider; never trust just the browser's team names.
-        rows=api("fixtures",{"id":data.fixture_id,"timezone":"Asia/Shanghai"})
-        if len(rows)!=1:raise HTTPException(422,"Fixture not accessible")
-        fixture=rows[0]
+        fixture=football_fixture(data.fixture_id)
         home=fixture["teams"]["home"]["name"];away=fixture["teams"]["away"]["name"]
         league_name=(fixture.get("league") or {}).get("name")
         kickoff_value=fixture["fixture"]["date"]
