@@ -1000,6 +1000,20 @@ def test_football_fixture_cache_expires_without_serving_stale_data():
     with m.conn() as c:
         assert c.execute('SELECT COUNT(*) FROM football_fixture_cache').fetchone()[0]==0
 
+def test_fixture_caches_collapse_duplicate_keys_in_one_batch():
+    # PostgreSQL refuses ON CONFLICT DO UPDATE when a batch repeats a key.
+    m.cache_football_fixtures([football_payload(12),football_payload(13),football_payload(12)])
+    with m.conn() as c:
+        assert c.execute('SELECT COUNT(*) FROM football_fixture_cache').fetchone()[0]==2
+    m.cache_basketball_fixtures('nba',[
+        {'id':501,'date':'2026-10-28','datetime':'2026-10-28T23:00:00Z','home_team':{'full_name':'H1'},'visitor_team':{'full_name':'A1'}},
+        {'id':501,'date':'2026-10-28','datetime':'2026-10-28T23:00:00Z','home_team':{'full_name':'H2'},'visitor_team':{'full_name':'A2'}},
+    ])
+    with m.conn() as c:
+        rows=c.execute('SELECT payload_json FROM basketball_fixture_cache').fetchall()
+    assert len(rows)==1
+    assert json.loads(rows[0][0])['home_team']['full_name']=='H2'
+
 def test_task_list_settles_each_snapshot_once(client,monkeypatch):
     _seed_task(31,'A','B',status='running')
     calls=[]

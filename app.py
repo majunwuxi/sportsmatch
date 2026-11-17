@@ -422,16 +422,18 @@ def balldontlie_api(endpoint,params=None,league_code="nba"):
 
 def cache_basketball_fixtures(league_code,games):
     now=time.time()
-    rows=[]
+    # PostgreSQL rejects ON CONFLICT DO UPDATE when one batch repeats a key, so
+    # collapse duplicates before writing (a repeated game id keeps the last one).
+    rows={}
     for game in games:
         try:provider_game_id=str(int(game["id"]))
         except (KeyError,TypeError,ValueError):continue
-        rows.append((league_code,provider_game_id,json.dumps(game,ensure_ascii=False,separators=(",",":")),now))
+        rows[(league_code,provider_game_id)]=(league_code,provider_game_id,json.dumps(game,ensure_ascii=False,separators=(",",":")),now)
     if not rows:return
     with conn() as c:
         c.executemany("""INSERT INTO basketball_fixture_cache(league_code,provider_game_id,payload_json,fetched_at)
             VALUES (?,?,?,?) ON CONFLICT(league_code,provider_game_id) DO UPDATE SET
-            payload_json=excluded.payload_json,fetched_at=excluded.fetched_at""",rows)
+            payload_json=excluded.payload_json,fetched_at=excluded.fetched_at""",list(rows.values()))
         c.execute("DELETE FROM basketball_fixture_cache WHERE fetched_at<?",(now-BALLDONTLIE_FIXTURE_CACHE_TTL_SECONDS,))
 
 def cached_basketball_fixture(league_code,provider_game_id):
@@ -449,15 +451,16 @@ def cached_basketball_fixture(league_code,provider_game_id):
 
 def cache_football_fixtures(rows):
     now=time.time()
-    entries=[]
+    # Same PostgreSQL rule as the basketball cache: one conflict key per batch.
+    entries={}
     for row in rows:
         try:fixture_id=int((row.get("fixture") or {}).get("id"))
         except (AttributeError,TypeError,ValueError):continue
-        entries.append((fixture_id,json.dumps(row,ensure_ascii=False,separators=(",",":")),now))
+        entries[fixture_id]=(fixture_id,json.dumps(row,ensure_ascii=False,separators=(",",":")),now)
     if not entries:return
     with conn() as c:
         c.executemany("""INSERT INTO football_fixture_cache(fixture_id,payload_json,fetched_at) VALUES (?,?,?)
-            ON CONFLICT(fixture_id) DO UPDATE SET payload_json=excluded.payload_json,fetched_at=excluded.fetched_at""",entries)
+            ON CONFLICT(fixture_id) DO UPDATE SET payload_json=excluded.payload_json,fetched_at=excluded.fetched_at""",list(entries.values()))
         c.execute("DELETE FROM football_fixture_cache WHERE fetched_at<?",(now-FOOTBALL_FIXTURE_CACHE_TTL_SECONDS,))
 
 def cached_football_fixtures(fixture_ids):
