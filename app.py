@@ -58,6 +58,11 @@ BALLDONTLIE_FIXTURE_CACHE_TTL_SECONDS=30*60
 # Search results are cached so creating a monitor does not spend another
 # API-Football request per leg; a stale entry only triggers one fresh lookup.
 FOOTBALL_FIXTURE_CACHE_TTL_SECONDS=30*60
+# Settlement depends only on a task's bets, scores and status, so the 30 s page
+# refresh and the statistics endpoint can share one computation per snapshot.
+TASK_SNAPSHOT_CACHE={}
+TASK_SNAPSHOT_CACHE_LIMIT=512
+TASK_SNAPSHOT_CACHE_MAX_TICKETS=200
 TASK_LOCK=threading.RLock()
 POLL_ENABLED=os.getenv("ENABLE_POLLER","false").lower()=="true"
 LISTED_WINS={"1:0","2:0","2:1","3:0","3:1","3:2","4:0","4:1","4:2","5:0","5:1","5:2"}
@@ -1323,6 +1328,51 @@ def _utc_datetime(value):
     except (TypeError,ValueError):
         return datetime.min.replace(tzinfo=timezone.utc)
 
+def _score_pair(value):
+    parts=(value or "").split(":")
+    if len(parts)==2 and all(part.isdigit() for part in parts):return int(parts[0]),int(parts[1])
+    return None,None
+
+def task_snapshot(task):
+    """Parse a task's bets and settle it once per distinct task snapshot.
+
+    Returns (tickets, listed_scores, listed_scores_verified, settlement). The
+    values are shared between requests and must be treated as read-only.
+    """
+    key=(task.get("status"),task.get("ticket_json") or "[]",task.get("listed_scores_json") or "",
+         int(bool(task.get("listed_scores_verified"))),
+         task.get("settlement_score") or "",task.get("last_score") or "",task.get("half_score") or "")
+    cached=TASK_SNAPSHOT_CACHE.get(key)
+    if cached is not None:return cached
+    tickets=json.loads(task.get("ticket_json") or "[]")
+    listed_raw=task.get("listed_scores_json")
+    listed_scores=json.loads(listed_raw) if listed_raw else None
+    verified=bool(task.get("listed_scores_verified"))
+    settlement=outcome(*_score_pair(task.get("settlement_score") or task.get("last_score")),tickets,
+        *_score_pair(task.get("half_score")),listed_scores if verified else None)
+    if task.get("status")=="review_required":
+        settlement["selection"]=None
+        settlement["payout"]=0
+        settlement["net"]=None
+        settlement["pending_tickets"]=len(settlement["tickets"])
+        for ticket in settlement["tickets"]:
+            ticket["won"]=None
+            ticket["payout"]=0
+        for market in settlement["market_summaries"]:
+            market["payout"]=0
+            market["net"]=None
+            market["pending_tickets"]=market["tickets"]
+    settlement["final"]=task.get("status")=="finished"
+    snapshot=(tickets,listed_scores,verified,settlement)
+    # Very large tickets would make the cache unbounded; they are cheap enough
+    # to settle per request and are not cached.
+    if len(tickets)<=TASK_SNAPSHOT_CACHE_MAX_TICKETS:
+        if len(TASK_SNAPSHOT_CACHE)>=TASK_SNAPSHOT_CACHE_LIMIT:
+            for stale in list(TASK_SNAPSHOT_CACHE)[:TASK_SNAPSHOT_CACHE_LIMIT//4]:
+                TASK_SNAPSHOT_CACHE.pop(stale,None)
+        TASK_SNAPSHOT_CACHE[key]=snapshot
+    return snapshot
+
 @app.get("/api/tasks")
 def tasks(_:str=Depends(auth), include_history:bool=False):
     now=datetime.now(timezone.utc)
@@ -1336,42 +1386,25 @@ def tasks(_:str=Depends(auth), include_history:bool=False):
                 continue
         visible.append(x)
     rows=visible
-    rows.sort(key=lambda x:(
-        x.get("status")=="finished",
-        _utc_datetime(x.get("kickoff")),
-        int(x.get("id") or 0),
-    ))
+    # Sorting must not re-parse every kickoff for each comparison.
+    order=[(x.get("status")=="finished",_utc_datetime(x.get("kickoff")),int(x.get("id") or 0),index)
+        for index,x in enumerate(rows)]
+    order.sort()
+    rows=[rows[item[3]] for item in order]
     for x in rows:
-        x["tickets"]=json.loads(x.pop("ticket_json"))
-        listed_scores_raw=x.pop("listed_scores_json",None)
-        x["listed_scores"]=json.loads(listed_scores_raw) if listed_scores_raw else None
-        x["listed_scores_verified"]=bool(x.pop("listed_scores_verified",0))
-        parts=(x.get("settlement_score") or x["last_score"] or "").split(":")
-        half=(x.get("half_score") or "").split(":")
-        verified_scores=x["listed_scores"] if x["listed_scores_verified"] else None
-        x["settlement"]=outcome(*(map(int,parts) if len(parts)==2 and all(p.isdigit() for p in parts) else [None,None]),x["tickets"],
-            *(map(int,half) if len(half)==2 and all(p.isdigit() for p in half) else [None,None]),verified_scores)
-        if x["status"]=="review_required":
-            settlement=x["settlement"]
-            settlement["selection"]=None
-            settlement["payout"]=0
-            settlement["net"]=None
-            settlement["pending_tickets"]=len(settlement["tickets"])
-            for ticket in settlement["tickets"]:
-                ticket["won"]=None
-                ticket["payout"]=0
-            for market in settlement["market_summaries"]:
-                market["payout"]=0
-                market["net"]=None
-                market["pending_tickets"]=market["tickets"]
-        x["settlement"]["final"]=x["status"]=="finished"
+        tickets,listed_scores,verified,settlement=task_snapshot(x)
+        x["tickets"]=tickets
+        x["listed_scores"]=listed_scores
+        x["listed_scores_verified"]=verified
+        x["settlement"]=settlement
+        x.pop("ticket_json",None)
+        x.pop("listed_scores_json",None)
         x["status_cn"]=TASK_STATUS_CN.get(x["status"],x["status"])
         if x.get("sport")=="basketball":
             x["home_cn"]=BASKETBALL_TEAM_NAMES_ZH.get(x["home"],"")
             x["away_cn"]=BASKETBALL_TEAM_NAMES_ZH.get(x["away"],"")
             state,_,raw_status=str(x.get("provider_status") or "").partition("|")
             x["game_status_cn"]=(raw_status or _bdl_status_cn(state)) if state else "等待首次查询"
-
     return rows
 
 @app.get("/api/statistics")

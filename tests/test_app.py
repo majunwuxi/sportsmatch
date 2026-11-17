@@ -12,6 +12,7 @@ from datetime import datetime,timezone,timedelta
 @pytest.fixture(autouse=True)
 def isolated(tmp_path,monkeypatch):
     monkeypatch.setattr(m,'DB',tmp_path/'test.sqlite')
+    m.TASK_SNAPSHOT_CACHE.clear()
     m.init_db()
 
 @pytest.fixture
@@ -998,3 +999,41 @@ def test_football_fixture_cache_expires_without_serving_stale_data():
     assert m.cached_football_fixture(12) is None
     with m.conn() as c:
         assert c.execute('SELECT COUNT(*) FROM football_fixture_cache').fetchone()[0]==0
+
+def test_task_list_settles_each_snapshot_once(client,monkeypatch):
+    _seed_task(31,'A','B',status='running')
+    calls=[]
+    original=m.outcome
+    def counting_outcome(*args,**kwargs):
+        calls.append(1)
+        return original(*args,**kwargs)
+    monkeypatch.setattr(m,'outcome',counting_outcome)
+    auth=('test','test-password')
+    assert client.get('/api/tasks',auth=auth).status_code==200
+    first=len(calls)
+    assert first==1
+    assert client.get('/api/tasks',auth=auth).status_code==200
+    assert len(calls)==first
+    assert client.get('/api/statistics',auth=auth).status_code==200
+    assert len(calls)==first
+    with m.conn() as c:
+        c.execute("UPDATE tasks SET last_score='1:0',settlement_score='1:0' WHERE fixture_id=31")
+    assert client.get('/api/tasks',auth=auth).status_code==200
+    assert len(calls)==first+1
+
+def test_task_list_settlement_matches_a_direct_outcome_call(client):
+    _seed_task(32,'A','B',status='finished',score='3:0')
+    row=client.get('/api/tasks',auth=('test','test-password')).json()[0]
+    # _seed_task stores a 0:0 half-time score and a single total-goals ticket.
+    expected=m.outcome(3,0,row['tickets'],0,0)
+    expected['final']=True
+    assert json.loads(json.dumps(row['settlement']))==json.loads(json.dumps(expected))
+
+def test_task_list_masks_payouts_for_review_required_tasks(client):
+    _seed_task(33,'A','B',status='review_required',score='2:1')
+    row=client.get('/api/tasks',auth=('test','test-password')).json()[0]
+    assert row['settlement']['selection'] is None
+    assert row['settlement']['payout']==0
+    assert row['settlement']['net'] is None
+    assert row['settlement']['tickets'][0]['won'] is None
+    assert row['settlement']['tickets'][0]['payout']==0
