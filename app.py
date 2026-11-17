@@ -1,4 +1,4 @@
-import os, json, time, sqlite3, threading, urllib.request, urllib.parse, urllib.error, http.client, ipaddress, socket, ssl, re, math
+import os, json, time, sqlite3, threading, urllib.request, urllib.parse, urllib.error, http.client, ipaddress, socket, ssl, re, math, hashlib
 from itertools import combinations, product
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -1248,6 +1248,29 @@ def load_parlay(parlay_id):
     loaded=load_parlays([parlay_id])
     return loaded[0] if loaded else None
 
+# The list endpoint is polled every 30 s. Leaving the expanded combinations in a
+# body cache keyed by the exact state they were built from keeps that poll free
+# until a score, bet or status actually changes.
+PARLAY_RESPONSE_CACHE={}
+PARLAY_RESPONSE_CACHE_LIMIT=4
+PARLAY_TICKET_FIELDS=("id","pass_type","multiples","unit_stake","total_stake","declared_payout","status")
+PARLAY_LEG_FIELDS=("id","leg_index","fixture_id","sport","league_code","home","away","league_name","kickoff",
+    "market","selection","handicap","line","odds","selections_json","void_confirmed")
+PARLAY_TASK_FIELDS=("status","settlement_score","last_score","half_score","provider_status",
+    "listed_scores_json","listed_scores_verified","league_name","start_at")
+
+def parlay_fingerprint(loaded):
+    """Hash only the fields evaluate_parlay reads, so poller bookkeeping misses."""
+    digest=hashlib.blake2b(digest_size=16)
+    tickets=[[[item.get(field) for field in PARLAY_TICKET_FIELDS],
+              [[leg.get(field) for field in PARLAY_LEG_FIELDS] for leg in legs]]
+             for item,legs,_ in loaded]
+    digest.update(json.dumps(tickets,ensure_ascii=False,separators=(",",":"),default=str).encode())
+    tasks=[[fixture_id,[task.get(field) for field in PARLAY_TASK_FIELDS]]
+        for fixture_id,task in sorted(loaded[0][2].items())] if loaded else []
+    digest.update(json.dumps(tasks,ensure_ascii=False,separators=(",",":"),default=str).encode())
+    return digest.hexdigest()
+
 def parlay_result(parent,legs,tasks):
     result=evaluate_parlay(parent,legs,tasks)
     if parent.get("status")=="stopped":
@@ -1518,6 +1541,11 @@ def statistics(_:str=Depends(auth)):
 @app.get("/api/parlays")
 def get_parlays(_:str=Depends(auth)):
     loaded=load_parlays()
+    if not loaded:return json_response([])
+    key=parlay_fingerprint(loaded)
+    cached=PARLAY_RESPONSE_CACHE.get(key)
+    if cached is not None:
+        return Response(content=cached,media_type="application/json")
     views=[parlay_result(parent,legs,tasks) for parent,legs,tasks in loaded]
     # Reading the list must stay cheap: status and watcher cleanup are touched
     # only when a ticket really changes state, never on a steady-state read.
@@ -1532,7 +1560,11 @@ def get_parlays(_:str=Depends(auth)):
         settled={parlay_id for _,parlay_id in changed}
         stop_unused_parlay_watchers([int(leg["fixture_id"]) for parent,legs,_ in loaded
             if int(parent["id"]) in settled for leg in legs])
-    return json_response(views)
+    body=json.dumps(views,ensure_ascii=False,separators=(",",":"),default=_json_fallback).encode()
+    if len(PARLAY_RESPONSE_CACHE)>=PARLAY_RESPONSE_CACHE_LIMIT:
+        PARLAY_RESPONSE_CACHE.pop(next(iter(PARLAY_RESPONSE_CACHE)))
+    PARLAY_RESPONSE_CACHE[key]=body
+    return Response(content=body,media_type="application/json")
 
 @app.post("/api/parlays")
 def create_parlay(data:ParlayIn,_:str=Depends(auth)):

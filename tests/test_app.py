@@ -13,6 +13,7 @@ from datetime import datetime,timezone,timedelta
 def isolated(tmp_path,monkeypatch):
     monkeypatch.setattr(m,'DB',tmp_path/'test.sqlite')
     m.TASK_SNAPSHOT_CACHE.clear()
+    m.PARLAY_RESPONSE_CACHE.clear()
     m.init_db()
 
 @pytest.fixture
@@ -1084,3 +1085,38 @@ def test_json_responses_are_gzipped_and_decode_identically(client):
     # A response below the 1 KB threshold stays uncompressed.
     small=client.get('/api/health',auth=auth,headers={'accept-encoding':'gzip'})
     assert small.headers.get('content-encoding') is None
+
+def test_parlay_list_response_is_cached_until_the_bets_or_scores_change(client,monkeypatch):
+    _seed_task(41,'H41','A41')
+    _seed_task(42,'H42','A42')
+    _seed_tracked_parlay(fixtures=(41,42))
+    calls=[]
+    original=m.evaluate_parlay
+    def counting_evaluate(*args,**kwargs):
+        calls.append(1)
+        return original(*args,**kwargs)
+    monkeypatch.setattr(m,'evaluate_parlay',counting_evaluate)
+    auth=('test','test-password')
+
+    first=client.get('/api/parlays',auth=auth)
+    assert first.status_code==200
+    computed=len(calls)
+    assert computed==1
+
+    second=client.get('/api/parlays',auth=auth)
+    assert second.content==first.content
+    assert len(calls)==computed
+
+    # Poller bookkeeping changes must not invalidate the cached body.
+    with m.conn() as c:
+        c.execute("UPDATE tasks SET next_check=?,last_check=? WHERE fixture_id IN (41,42)",
+            (datetime.now(timezone.utc).isoformat(),datetime.now(timezone.utc).isoformat()))
+    assert client.get('/api/parlays',auth=auth).content==first.content
+    assert len(calls)==computed
+
+    # A live score does invalidate it.
+    with m.conn() as c:
+        c.execute("UPDATE tasks SET last_score='1:0',settlement_score='1:0' WHERE fixture_id=41")
+    third=client.get('/api/parlays',auth=auth)
+    assert len(calls)==computed+1
+    assert third.content!=first.content
