@@ -908,7 +908,23 @@ async def lifespan(app):
 app=FastAPI(title="Match Monitor",lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 # The parlay list carries every settled combination, so an uncompressed response
 # grows to hundreds of KB. Compressing it cuts the wire size by roughly 10x.
-app.add_middleware(GZipMiddleware,minimum_size=1024)
+# Level 6 is within ~8% of level 9 on this payload for half the CPU.
+app.add_middleware(GZipMiddleware,minimum_size=1024,compresslevel=6)
+
+def _json_fallback(value):
+    if isinstance(value,Decimal):return float(value)
+    if isinstance(value,datetime):return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+def json_response(payload):
+    """Serialize an already plain payload without FastAPI's jsonable_encoder.
+
+    That encoder walks every nested value and costs far more than json.dumps and
+    gzip together on the parlay list, where the same numbers are re-visited for
+    each of the thousands of combination rows.
+    """
+    return Response(content=json.dumps(payload,ensure_ascii=False,separators=(",",":"),default=_json_fallback),
+        media_type="application/json")
 
 @app.middleware("http")
 async def guard(request:Request, call_next):
@@ -1388,8 +1404,8 @@ def task_snapshot(task):
         TASK_SNAPSHOT_CACHE[key]=snapshot
     return snapshot
 
-@app.get("/api/tasks")
-def tasks(_:str=Depends(auth), include_history:bool=False):
+def task_rows(include_history=False):
+    """Task rows with bets, settlement and display labels (shared read model)."""
     now=datetime.now(timezone.utc)
     with conn() as c:
         rows=[dict(x) for x in c.execute("SELECT * FROM tasks ORDER BY created_at DESC")]
@@ -1422,6 +1438,10 @@ def tasks(_:str=Depends(auth), include_history:bool=False):
             x["game_status_cn"]=(raw_status or _bdl_status_cn(state)) if state else "等待首次查询"
     return rows
 
+@app.get("/api/tasks")
+def tasks(_:str=Depends(auth), include_history:bool=False):
+    return json_response(task_rows(include_history))
+
 @app.get("/api/statistics")
 def statistics(_:str=Depends(auth)):
     days={}
@@ -1449,7 +1469,7 @@ def statistics(_:str=Depends(auth)):
                 bucket["payout"]+=Decimal(str(payout or 0))
             else:
                 bucket["pending"]+=1
-    for task in tasks(_=_,include_history=True):
+    for task in task_rows(include_history=True):
         picks=task.get("tickets") or []
         if not picks:continue
         key=date_key(task.get("kickoff"))
@@ -1473,7 +1493,7 @@ def statistics(_:str=Depends(auth)):
             add(key,category,combo["stake"],combo["payout"],combo["state"] in {"won","lost"})
         detail_matches=[{"home":leg["home"],"away":leg["away"],"home_cn":leg.get("home_cn") or BASKETBALL_TEAM_NAMES_ZH.get(leg["home"],""),"away_cn":leg.get("away_cn") or BASKETBALL_TEAM_NAMES_ZH.get(leg["away"],"")} for leg in legs]
         details.setdefault(key,[]).append({"type":"parlay","id":parlay_id,"kickoff":min(legs,key=lambda leg:_utc_datetime(leg["kickoff"]))["kickoff"],"match":"；".join(leg["home"]+" vs "+leg["away"] for leg in legs),"matches":detail_matches,"market":result["pass_type"],"selection":"；".join(f"{leg['home']} vs {leg['away']}："+"、".join(f"{pick['market_label']} {pick['selection']} SP {pick['odds']}" for pick in leg["selections"]) for leg in result["legs"]),"stake":result["total_stake"],"payout":result["payout"],"net":result["net"],"pending":sum(combo["state"] not in {"won","lost"} for combo in result["combinations"])})
-    return {"days":{
+    return json_response({"days":{
         key:{
             "stake":float(v["stake"]),
             "payout":float(v["payout"]),
@@ -1493,7 +1513,7 @@ def statistics(_:str=Depends(auth)):
             },
         }
         for key,v in days.items()
-    },"details":details,"missing_dates":missing}
+    },"details":details,"missing_dates":missing})
 
 @app.get("/api/parlays")
 def get_parlays(_:str=Depends(auth)):
@@ -1512,7 +1532,7 @@ def get_parlays(_:str=Depends(auth)):
         settled={parlay_id for _,parlay_id in changed}
         stop_unused_parlay_watchers([int(leg["fixture_id"]) for parent,legs,_ in loaded
             if int(parent["id"]) in settled for leg in legs])
-    return views
+    return json_response(views)
 
 @app.post("/api/parlays")
 def create_parlay(data:ParlayIn,_:str=Depends(auth)):
