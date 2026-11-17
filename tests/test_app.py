@@ -1,3 +1,4 @@
+import io
 import os
 import json
 os.environ['ADMIN_USER']='test'
@@ -1120,3 +1121,46 @@ def test_parlay_list_response_is_cached_until_the_bets_or_scores_change(client,m
     third=client.get('/api/parlays',auth=auth)
     assert len(calls)==computed+1
     assert third.content!=first.content
+
+def _fake_model_response(payload):
+    class Response(io.BytesIO):
+        def __enter__(self):return self
+        def __exit__(self,*args):return False
+    return Response(payload)
+
+def test_ocr_model_proxy_downloads_once_and_serves_from_disk(client,monkeypatch,tmp_path):
+    models=tmp_path/'models'
+    monkeypatch.setenv('OCR_MODEL_DIR',str(models))
+    calls=[]
+    def fake_urlopen(url,timeout=None):
+        calls.append((url,timeout))
+        return _fake_model_response(b'TARBALL-BYTES')
+    monkeypatch.setattr(m.urllib.request,'urlopen',fake_urlopen)
+    auth=('test','test-password')
+
+    first=client.get('/ocr-models/PP-OCRv5_mobile_det_onnx_infer.tar',auth=auth)
+    assert first.status_code==200
+    assert first.content==b'TARBALL-BYTES'
+    assert first.headers['cache-control']=='public, max-age=31536000, immutable'
+    assert calls[0][0].startswith('https://paddle-model-ecology.bj.bcebos.com/')
+    assert calls[0][1]==300
+
+    second=client.get('/ocr-models/PP-OCRv5_mobile_det_onnx_infer.tar',auth=auth)
+    assert second.content==b'TARBALL-BYTES'
+    assert len(calls)==1
+    assert (models/'PP-OCRv5_mobile_det_onnx_infer.tar').read_bytes()==b'TARBALL-BYTES'
+
+def test_ocr_model_proxy_rejects_unknown_files_and_cleans_up_failures(client,monkeypatch,tmp_path):
+    models=tmp_path/'models'
+    monkeypatch.setenv('OCR_MODEL_DIR',str(models))
+    auth=('test','test-password')
+    assert client.get('/ocr-models/unknown_model.tar',auth=auth).status_code==404
+    # The route only accepts a bare file name, so a path cannot escape the cache.
+    assert client.get('/ocr-models/nested/unknown_model.tar',auth=auth).status_code==404
+
+    def offline(url,timeout=None):raise OSError('offline')
+    monkeypatch.setattr(m.urllib.request,'urlopen',offline)
+    response=client.get('/ocr-models/PP-OCRv5_mobile_rec_onnx_infer.tar',auth=auth)
+    assert response.status_code==502
+    assert not (models/'PP-OCRv5_mobile_rec_onnx_infer.tar').exists()
+    assert not (models/'PP-OCRv5_mobile_rec_onnx_infer.tar.part').exists()

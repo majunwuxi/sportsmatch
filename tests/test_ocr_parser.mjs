@@ -557,8 +557,14 @@ test('uses pinned PaddleOCR.js PP-OCRv5 in the browser with Tesseract fallback',
   assert.match(uiSource, /backend: "wasm"/);
   assert.match(uiSource, /PaddleOCR\.create/);
   assert.match(uiSource, /worker: false/);
-  assert.match(uiSource, /createPaddle = async \(\) => PaddleOCR\.create\(\{ \.\.\.paddleOcrOptions, worker: false \}\)/);
+  assert.match(uiSource, /createPaddle = async \(\) => PaddleOCR\.create\(\{ \.\.\.paddleOcrOptions, worker: false, fetch: paddleModelFetch \}\)/);
   assert.doesNotMatch(uiSource, /createPaddle\(true\)/);
+  // Model archives go through this origin; the Baidu bucket is unreachable on
+  // some networks and used to fail the whole engine with "Failed to fetch".
+  assert.match(uiSource, /paddle-model-ecology/);
+  assert.match(uiSource, /fetch\("\/ocr-models\/" \+ name, init\)/);
+  assert.match(uiSource, /if \(mirrored\.ok\) return mirrored/);
+  assert.match(uiSource, /PP-OCRv\\d\+_\[A-Za-z0-9\]\+_\(\?:det\|rec\)_onnx_infer\\\.tar/);
   assert.match(uiSource, /createTesseractWorker/);
   assert.match(uiSource, /recognizeBatch/);
   assert.match(uiSource, /图片仅在本机浏览器识别/);

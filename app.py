@@ -1,4 +1,4 @@
-import os, json, time, sqlite3, threading, urllib.request, urllib.parse, urllib.error, http.client, ipaddress, socket, ssl, re, math, hashlib
+import os, json, time, sqlite3, threading, urllib.request, urllib.parse, urllib.error, http.client, ipaddress, socket, ssl, re, math, hashlib, shutil
 from itertools import combinations, product
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -1957,6 +1957,41 @@ def ocr_parser(_:str=Depends(auth)):
 @app.get("/ocr-ui.js")
 def ocr_ui(_:str=Depends(auth)):
     return FileResponse(Path(__file__).with_name("ocr-ui.js"),media_type="application/javascript",headers={"Cache-Control":"no-store"})
+
+# PaddleOCR's browser engine downloads its ONNX models from a Baidu bucket that
+# some networks cannot reach, which surfaces as a bare "Failed to fetch" and
+# silently downgrades recognition to Tesseract. Serving the archives from this
+# origin removes that dependency; each file is downloaded once and kept on disk.
+OCR_MODEL_SOURCES={
+    "PP-OCRv5_mobile_det_onnx_infer.tar":
+        "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_mobile_det_onnx_infer.tar",
+    "PP-OCRv5_mobile_rec_onnx_infer.tar":
+        "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_mobile_rec_onnx_infer.tar",
+}
+OCR_MODEL_LOCK=threading.Lock()
+
+@app.get("/ocr-models/{name}")
+def ocr_model(name:str,_:str=Depends(auth)):
+    upstream=OCR_MODEL_SOURCES.get(name)
+    if upstream is None:raise HTTPException(404,"未知的 OCR 模型文件")
+    directory=Path(os.getenv("OCR_MODEL_DIR") or str(DB.parent/"ocr-models"))
+    target=directory/name
+    if not target.is_file():
+        directory.mkdir(parents=True,exist_ok=True)
+        with OCR_MODEL_LOCK:
+            if not target.is_file():
+                partial=directory/(name+".part")
+                try:
+                    with urllib.request.urlopen(upstream,timeout=300) as response, partial.open("wb") as handle:
+                        shutil.copyfileobj(response,handle,1024*1024)
+                    if partial.stat().st_size<=0:raise RuntimeError("empty model archive")
+                    partial.replace(target)
+                except Exception as error:
+                    partial.unlink(missing_ok=True)
+                    print("ocr model download failed:",safe_exception_detail(error),flush=True)
+                    raise HTTPException(502,"服务器暂时无法下载 OCR 模型，请稍后重试或改用备用引擎")
+    return FileResponse(target,media_type="application/octet-stream",
+        headers={"Cache-Control":"public, max-age=31536000, immutable"})
 
 @app.get("/parlay-parser.js")
 def parlay_parser(_:str=Depends(auth)):

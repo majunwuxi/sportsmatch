@@ -387,13 +387,30 @@
     });
   }
 
+  // PaddleOCR downloads its ONNX archives from a Baidu bucket. Some networks
+  // cannot reach that host, which shows up as a bare "Failed to fetch" and
+  // silently downgrades recognition to Tesseract. Rewrite those two URLs to this
+  // origin, where the backend downloads the archive once and caches it on disk.
+  const PADDLE_MODEL_ARCHIVE = /^PP-OCRv\d+_[A-Za-z0-9]+_(?:det|rec)_onnx_infer\.tar$/;
+  async function paddleModelFetch(input, init) {
+    const url = typeof input === "string" ? input : String(input?.url || "");
+    const name = url.split("?")[0].split("/").pop() || "";
+    if (url.includes("paddle-model-ecology") && PADDLE_MODEL_ARCHIVE.test(name)) {
+      // Prefer this origin's mirror; fall back to the original host when the
+      // page is served somewhere that does not proxy /ocr-models.
+      const mirrored = await fetch("/ocr-models/" + name, init);
+      if (mirrored.ok) return mirrored;
+    }
+    return fetch(input, init);
+  }
+
   async function createOcrWorker() {
     let PaddleOCR;
     let paddle = null;
     let tesseract = null;
     let engine = "paddle-main";
     let fallbackNotice = "";
-    const createPaddle = async () => PaddleOCR.create({ ...paddleOcrOptions, worker: false });
+    const createPaddle = async () => PaddleOCR.create({ ...paddleOcrOptions, worker: false, fetch: paddleModelFetch });
     const getTesseract = async (reason) => {
       if (!tesseract) {
         fallbackNotice = reason ? ocrErrorMessage(reason) : "PaddleOCR.js不可用";
