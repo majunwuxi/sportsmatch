@@ -1,0 +1,12 @@
+[Unit]
+Description=Synchronize Sportsmatch lottery match numbers
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/sportsmatch
+EnvironmentFile=/opt/sportsmatch/.env
+StateDirectory=sportsmatch-sporttery
+ExecStart=/opt/sportsmatch/.venv/bin/python -m scripts.sync_sporttery_numbers --apply --report-dir /var/lib/sportsmatch-sporttery
+TimeoutStartSec=4min
