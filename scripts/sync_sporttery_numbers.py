@@ -16,6 +16,18 @@ PAGES = {
 }
 NUMBER = r"周[一二三四五六日天][0-9]{3}(?![0-9])"
 
+# NBA nicknames used by the 500 schedule, keyed by the provider's English nickname.
+NBA_SHORT_NAMES = {
+    "hawks": "老鹰", "celtics": "凯尔特人", "nets": "篮网", "hornets": "黄蜂",
+    "bulls": "公牛", "cavaliers": "骑士", "mavericks": "独行侠", "nuggets": "掘金",
+    "pistons": "活塞", "warriors": "勇士", "rockets": "火箭", "pacers": "步行者",
+    "clippers": "快船", "lakers": "湖人", "grizzlies": "灰熊", "heat": "热火",
+    "bucks": "雄鹿", "timberwolves": "森林狼", "pelicans": "鹈鹕", "knicks": "尼克斯",
+    "thunder": "雷霆", "magic": "魔术", "76ers": "76人", "suns": "太阳",
+    "blazers": "开拓者", "kings": "国王", "spurs": "马刺", "raptors": "猛龙",
+    "jazz": "爵士", "wizards": "奇才",
+}
+
 
 def clean(fragment):
     fragment = re.sub(r"<em\b[^>]*>.*?</em>", "", fragment, flags=re.S)
@@ -128,8 +140,12 @@ def match_rows(app, rows):
             names = []
             for side in ("home", "away"):
                 name = normalize(fixture[side])
-                names.append({name} | aliases[name] |
-                             {normalize(fixture.get(side + "_cn") or "")})
+                side_names = {name} | aliases[name] | {normalize(fixture.get(side + "_cn") or "")}
+                if sport == "basketball" and league_code == "nba" and name:
+                    nickname = NBA_SHORT_NAMES.get(name.split()[-1])
+                    if nickname:
+                        side_names.add(nickname)
+                names.append(side_names)
             # 500 presents the teams in different orders across sports.
             if len(targets) == 2 and names[0] & targets and names[1] & targets and (
                 (names[0] & targets) | (names[1] & targets)
