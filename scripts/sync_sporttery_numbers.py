@@ -95,6 +95,7 @@ def match_rows(app, rows):
         if team.get("name_en") and team.get("name_zh"):
             aliases[normalize(team["name_en"])].add(normalize(team["name_zh"]))
     cache = {}
+    errors = {}
     for row in rows:
         sport = row["sport"]
         league = row["league"].upper()
@@ -105,8 +106,16 @@ def match_rows(app, rows):
         kickoff = datetime.fromisoformat(row["kickoff"])
         group = (sport, kickoff.date(), league_code)
         if group not in cache:
-            cache[group] = app.fixtures(date=kickoff.date().isoformat(), q="",
-                                        sport=sport, league_code=league_code)
+            try:
+                cache[group] = app.fixtures(date=kickoff.date().isoformat(), q="",
+                                            sport=sport, league_code=league_code)
+            except Exception as error:
+                cache[group] = None
+                label = f"{sport}/{league_code}/{kickoff.date()}" if sport == "basketball" else f"{sport}/{kickoff.date()}"
+                errors[label] = f"{type(error).__name__}: {error}"
+        if cache[group] is None:
+            row["status"] = "provider_error"
+            continue
         targets = {normalize(team) for team in row["teams"]}
         candidates = {}
         for fixture in cache[group]:
@@ -137,6 +146,7 @@ def match_rows(app, rows):
     for row in rows:
         if row["status"] == "matched" and counts[row["match_key"]] > 1:
             row["status"] = "ambiguous"
+    return errors
 
 
 def save_numbers(app, rows):
@@ -172,7 +182,7 @@ def main():
     if rows:
         import app
         try:
-            match_rows(app, rows)
+            errors.update(match_rows(app, rows))
             if args.apply:
                 save_numbers(app, rows)
         except Exception as error:
