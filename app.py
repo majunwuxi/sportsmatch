@@ -1168,7 +1168,8 @@ def evaluate_parlay(parlay,legs,tasks_by_fixture):
                 if not legs[index].get("void_confirmed")]
             stake=unit*multiple
             odds_product=math.prod(Decimal(str(pick["odds"])) for _,pick,_ in active)
-            per_yuan_prize=_money(odds_product)
+            # Round each single-bet prize before applying the ticket multiplier.
+            unit_prize=_money(odds_product*unit)
             if not active:
                 state="review_required";payout=None;has_review=True
             elif any(result["state"]=="lost" for _,_,result in active):
@@ -1178,8 +1179,8 @@ def evaluate_parlay(parlay,legs,tasks_by_fixture):
             elif any(result["state"]=="pending" for _,_,result in active):
                 state="pending";payout=None;has_pending=True
             else:
-                state="won";payout=per_yuan_prize*unit*multiple;confirmed_payout+=payout
-            theoretical=per_yuan_prize*unit*multiple if active else None
+                state="won";payout=unit_prize*multiple;confirmed_payout+=payout
+            theoretical=unit_prize*multiple if active else None
             if theoretical is not None:
                 choice_payouts.append(theoretical)
                 if state=="pending":pending_payouts.append(theoretical)
